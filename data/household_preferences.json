@@ -1,0 +1,174 @@
+{
+  "version": 1,
+  "likes": {
+    "genres": [
+      "thriller",
+      "sci-fi",
+      "black comedy",
+      "horror (serious tone)"
+    ],
+    "people": [
+      "Pedro Pascal",
+      "Margot Robbie"
+    ],
+    "languages": [
+      "en"
+    ],
+    "vibes": [
+      "possession/cult",
+      "home invasion",
+      "urban invasion",
+      "social-tech paranoia"
+    ],
+    "aesthetics": [
+      "slick",
+      "stylized",
+      "polished"
+    ],
+    "motifs": [
+      "claustrophobic",
+      "underground/contained",
+      "chamber",
+      "power reversals",
+      "perspective flips",
+      "timeline shifts"
+    ]
+  },
+  "dislikes": {
+    "genres": [
+      "found footage",
+      "atmosphere-only slow-burn",
+      "by-the-numbers procedural thriller"
+    ],
+    "aesthetics": [
+      "shaky-cam",
+      "overly gritty/drab grime"
+    ],
+    "tones": [
+      "pure camp",
+      "winking meta without teeth"
+    ],
+    "structure": [
+      "last-minute/contrived twists"
+    ],
+    "vibes": [
+      "exploitative splatter (Terrifier vibe)"
+    ]
+  },
+  "constraints": {
+    "eraMinYear": 2019,
+    "languageWhitelist": [
+      "en"
+    ],
+    "runtimeSweetSpotMins": [
+      100,
+      130
+    ],
+    "contentWarnings": [
+      "sexual assault (major theme)",
+      "cancer",
+      "harm to animals/dog death",
+      "misery porn"
+    ],
+    "visualsDisallow": [
+      "found footage",
+      "grimy shaky-cam"
+    ],
+    "allowJumpScares": true
+  },
+  "profile": {
+    "tone": {
+      "nonHorror": "dark-fun, witty",
+      "horror": "dead-serious, adrenaline-forward"
+    },
+    "pacing": "propulsive escalation; steady is fine if not breathless",
+    "structure": "twisty / shape-shifting; avoid last-minute contrivances",
+    "eraFeel": "modern; retro only if sharply reinterpreted",
+    "visuals": "slick/stylized/polished; avoid grimy shaky-cam; no found footage",
+    "threat": "slight-lean supernatural; sharp human concepts fine",
+    "reality": "grounded/plausible; lore flexible but coherent",
+    "meta": "in-world/minimal; must be earned",
+    "ending": "detonate or lock; prefer unexpected",
+    "goreViolence": "welcome if earned/stylish; avoid exploitative splatter",
+    "humor": {
+      "nonHorror": "welcome; no lowbrow/toilet",
+      "horror": "dry/acidic ok; no camp/slapstick"
+    },
+    "sound": "polish helpful, not make-or-break",
+    "plausibilityScore10": 8
+  },
+  "anchors": {
+    "loved": [
+      "The Matrix",
+      "The Art of Self-Defense",
+      "Greener Grass",
+      "Late Night with the Devil",
+      "Fresh",
+      "Mickey 17"
+    ],
+    "respondedTo": [
+      "The Outfit"
+    ],
+    "comfortSignals": [
+      "The Life Aquatic"
+    ],
+    "trustedFaces": [
+      "Pedro Pascal",
+      "Margot Robbie"
+    ],
+    "avoidOverEcho": [
+      "Late Night with the Devil adjacents"
+    ]
+  },
+  "heuristics": {
+    "lead": "recent, English, twist-forward, visually polished",
+    "pairing": "1 bigger angle with 1 hidden gem; emphasize hidden",
+    "themes": [
+      "media",
+      "tech",
+      "class",
+      "labor",
+      "consent",
+      "control"
+    ],
+    "chamber": "welcome if evolving and twist-driven",
+    "slowBurn": "if present, deliver decisive mid pivot or final escalation",
+    "exposition": "minimal to measured",
+    "coupleFirst": true,
+    "maxOptions": 3,
+    "zeroSpoilers": true,
+    "contentFlagsUpfront": [
+      "sexual assault",
+      "cancer",
+      "dog harm"
+    ],
+    "stopIfNotVibing": true
+  },
+  "currentCuriosities": {
+    "vibesTonight": [
+      "possession/cult",
+      "home/urban invasion",
+      "social-tech paranoia"
+    ],
+    "themesSoon": [
+      "tech dystopia",
+      "polyamory"
+    ]
+  },
+  "modeNotes": {
+    "horror": "serious, grounded plausibility; tense, fast escalation; coherent-but-flexible rules; minimal camp; clean coverage/editing",
+    "nonHorror": "deadpan→acidic allowed; sharp twisty plotting; ethical/satirical bite"
+  },
+  "antiPreferences": [
+    "slow-burn/atmosphere-only with little payoff",
+    "straightforward/by-the-numbers serious thrillers",
+    "overly gritty, drab, shaky-cam aesthetics; found footage",
+    "pure camp or winking meta without teeth",
+    "lore that collapses; last-minute because-twist reveals"
+  ],
+  "neverRecommend": {
+    "tmdbIds": [],
+    "titles": []
+  },
+  "notes": "Sleek, twisty, recent English-language genre; hidden gems over obvious; claustro/underground bonus."
+}

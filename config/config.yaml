@@ -1,0 +1,8 @@
+household:
+  displayName: Household
+radarr:
+  qualityProfileId: null
+  rootFolderPath: null
+sonarr:
+  qualityProfileId: null
+  rootFolderPath: null
