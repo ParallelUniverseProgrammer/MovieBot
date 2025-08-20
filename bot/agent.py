@@ -89,50 +89,89 @@ class Agent:
                     for tc in tool_calls
                 ],
             })
-            # Execute each tool sequentially with timeout and strict arg handling
-            for tc in tool_calls:
+            # Execute tool calls concurrently with bounded parallelism
+            rc = load_runtime_config(self.project_root)
+            timeout_ms = int(rc.get("tools", {}).get("timeoutMs", 8000))
+            parallelism = int(rc.get("tools", {}).get("parallelism", 4))
+            retry_max = int(rc.get("tools", {}).get("retryMax", 2))
+            backoff_base_ms = int(rc.get("tools", {}).get("backoffBaseMs", 200))
+
+            async def run_one(tc):
                 name = tc.function.name
                 args_json = tc.function.arguments or "{}"
                 self.log.info(f"tool call requested: {name}")
                 self.log.debug("tool args", extra={"name": name, "args": args_json})
+                # Parse args
                 try:
                     args = json.loads(args_json)
                 except json.JSONDecodeError as e:
-                    # Return structured invalid args error to the model
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "name": name,
-                        "content": json.dumps({"ok": False, "error": "invalid_json", "details": str(e)}),
-                    })
-                    continue
-                impl = self.tool_registry.get(name)
-                # Run async tool with timeout and timing
-                rc = load_runtime_config(self.project_root)
-                timeout_ms = int(rc.get("tools", {}).get("timeoutMs", 8000))
+                    payload = {"ok": False, "error": "invalid_json", "details": str(e)}
+                    return tc.id, name, payload, 0, False
+
+                # Execute with retries/backoff, timeout, and timing
+                attempt = 0
                 import time
                 start = time.monotonic()
+                cache_hit = False
+                last_err = None
+
+                async def attempt_once():
+                    try:
+                        return await asyncio.wait_for(self.tool_registry.get(name)(args), timeout=timeout_ms / 1000)
+                    except asyncio.TimeoutError as e:
+                        raise e
+
+                while True:
+                    try:
+                        result = await attempt_once()
+                        status = "ok"
+                        break
+                    except asyncio.TimeoutError as e:
+                        last_err = {"ok": False, "error": "timeout", "timeout_ms": timeout_ms, "name": name}
+                    except Exception as e:
+                        last_err = {"ok": False, "error": str(e)}
+                    if attempt >= retry_max:
+                        result = last_err
+                        status = "error"
+                        break
+                    # backoff with jitter
+                    jitter = (attempt + 1) * 0.1
+                    await asyncio.sleep((backoff_base_ms / 1000) * (2 ** attempt) + jitter)
+                    attempt += 1
+                duration_ms = int((time.monotonic() - start) * 1000)
+                self.log.info("tool done", extra={"name": name, "status": status, "duration_ms": duration_ms, "attempts": attempt + 1, "cache_hit": cache_hit})
+                return tc.id, name, result, attempt + 1, cache_hit
+
+            # Run with bounded concurrency
+            sem = asyncio.Semaphore(parallelism)
+
+            async def sem_wrapped(tc):
+                async with sem:
+                    return await run_one(tc)
+
+            async def run_all():
+                return await asyncio.gather(*[sem_wrapped(tc) for tc in tool_calls])
+
+            # Always spin a private loop in a new thread to avoid nested-loop issues
+            import threading
+
+            results_container = {}
+            def runner():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
                 try:
-                    # Wrap coroutine in wait_for inside a fresh run since we are in a worker thread
-                    async def run_with_timeout():
-                        return await asyncio.wait_for(impl(args), timeout=timeout_ms / 1000)
-                    result = asyncio.run(run_with_timeout())
-                    status = "ok"
-                except asyncio.TimeoutError:
-                    result = {"ok": False, "error": "timeout", "timeout_ms": timeout_ms, "name": name}
-                    status = "timeout"
-                except Exception as e:  # noqa: BLE001
-                    self.log.exception(f"tool execution failed: {name}: {e}")
-                    result = {"ok": False, "error": str(e)}
-                    status = "error"
+                    results_container['results'] = loop.run_until_complete(run_all())
                 finally:
-                    import time as _t
-                    duration_ms = int((_t.monotonic() - start) * 1000)
-                    self.log.info("tool done", extra={"name": name, "status": locals().get("status", "unknown"), "duration_ms": duration_ms})
-                    self.log.debug("tool result payload", extra={"name": name, "result": locals().get("result")})
+                    loop.close()
+
+            t = threading.Thread(target=runner)
+            t.start()
+            t.join()
+            results = results_container.get('results', [])
+            for tool_call_id, name, result, attempts, cache_hit in results:
                 messages.append({
                     "role": "tool",
-                    "tool_call_id": tc.id,
+                    "tool_call_id": tool_call_id,
                     "name": name,
                     "content": json.dumps(result),
                 })

@@ -10,5 +10,11 @@ llm:
   maxIters: 8
 tools:
   timeoutMs: 8000
+  parallelism: 4
+  retryMax: 2
+  backoffBaseMs: 200
 ux:
   progressThresholdMs: 5000
+cache:
+  ttlShortSec: 60
+  ttlMediumSec: 300

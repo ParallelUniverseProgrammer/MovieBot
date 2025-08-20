@@ -22,7 +22,17 @@ class ConversationStore:
     def add_user(self, conv_id: int, content: str) -> None:
         self._store[conv_id].append({"role": "user", "content": content})
 
-    def add_assistant(self, conv_id: int, content: str) -> None:
+    def add_assistant(self, conv_id: int, content: str | None) -> None:
+        """Append an assistant message if it is non-empty.
+
+        Skips appending when the model timed out or returned None/empty, to avoid
+        corrupting the chat history with null messages.
+        """
+        if content is None:
+            return
+        # Normalize and skip empty/whitespace-only messages, too
+        if isinstance(content, str) and content.strip() == "":
+            return
         self._store[conv_id].append({"role": "assistant", "content": content})
 
     def tail(self, conv_id: int) -> List[Dict[str, str]]:
