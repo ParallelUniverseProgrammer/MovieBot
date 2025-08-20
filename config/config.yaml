@@ -15,6 +15,11 @@ tools:
   backoffBaseMs: 200
 ux:
   progressThresholdMs: 5000
+http:
+  connectTimeoutMs: 3000
+  readTimeoutMs: 10000
+  totalTimeoutMs: 15000
+  maxConnections: 100
 cache:
   ttlShortSec: 60
   ttlMediumSec: 300

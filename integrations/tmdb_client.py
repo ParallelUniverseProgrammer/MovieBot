@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 from datetime import date, datetime
-import httpx
+from integrations.http_client import SharedHttpClient
+import json
 
 
 class TMDbClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
-        self._client = httpx.AsyncClient(base_url="https://api.themoviedb.org/3", timeout=20.0)
+        self._client = SharedHttpClient.instance()
+        self._base = "https://api.themoviedb.org/3"
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -27,9 +29,9 @@ class TMDbClient:
             query=query, year=year, primary_release_year=primary_release_year,
             language=language, page=page
         )
-        r = await self._client.get("/search/movie", params=params)
-        r.raise_for_status()
-        return r.json()
+        resp = await self._client.request("GET", f"{self._base}/search/movie", params=params)
+        data = await resp.json()
+        return data
 
     async def search_tv(self, query: str, first_air_date_year: Optional[int] = None,
                         language: str = "en-US", page: int = 1) -> Dict[str, Any]:
