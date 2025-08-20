@@ -6,3 +6,9 @@ radarr:
 sonarr:
   qualityProfileId: null
   rootFolderPath: null
+llm:
+  maxIters: 8
+tools:
+  timeoutMs: 8000
+ux:
+  progressThresholdMs: 5000

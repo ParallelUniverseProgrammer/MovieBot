@@ -90,7 +90,26 @@ def build_client() -> MovieBotClient:
         history = CONVERSATIONS.tail(conv_id)
         try:
             async with message.channel.typing():
-                response = await loop.run_in_executor(None, lambda: agent.converse(history))
+                # Show a progress note if it takes too long
+                rc = load_runtime_config(client.project_root)  # type: ignore[attr-defined]
+                progress_ms = int(rc.get("ux", {}).get("progressThresholdMs", 5000))
+                done = asyncio.Event()
+
+                async def progress_nag():
+                    try:
+                        await asyncio.wait_for(done.wait(), timeout=progress_ms / 1000)
+                    except asyncio.TimeoutError:
+                        try:
+                            await message.channel.send("Working on it — checking services…", silent=True)
+                        except Exception:
+                            pass
+
+                nag_task = asyncio.create_task(progress_nag())
+                try:
+                    response = await loop.run_in_executor(None, lambda: agent.converse(history))
+                finally:
+                    done.set()
+                    nag_task.cancel()
             text = (
                 response.choices[0].message.content  # type: ignore[attr-defined]
                 if hasattr(response, "choices") else str(response)
