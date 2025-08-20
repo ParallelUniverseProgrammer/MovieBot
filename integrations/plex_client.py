@@ -92,7 +92,7 @@ class PlexClient:
         try:
             # Map section type to actual section title
             # Tests expect capitalized type-based section names
-            section_name = "Movie" if section_type.lower() == "movie" else "Show" if section_type.lower() == "show" else section_type.title()
+            section_name = "Movies" if section_type.lower() == "movie" else "TV Shows" if section_type.lower() == "show" else section_type.title()
             section = self.plex.library.section(section_name)
             recent = section.recentlyAdded(maxresults=limit)
             return self._serialize_items(recent)
@@ -120,7 +120,7 @@ class PlexClient:
         """Get unwatched items from specified library."""
         try:
             # Tests expect capitalized type-based section names
-            section_name = "Movie" if section_type.lower() == "movie" else "Show" if section_type.lower() == "show" else section_type.title()
+            section_name = "Movies" if section_type.lower() == "movie" else "TV Shows" if section_type.lower() == "show" else section_type.title()
             section = self.plex.library.section(section_name)
             # Prefer native unwatched API with maxresults
             if hasattr(section, "unwatched") and callable(section.unwatched):
@@ -136,7 +136,7 @@ class PlexClient:
         """Get collections from specified library."""
         try:
             # Tests expect capitalized type-based section names
-            section_name = "Movie" if section_type.lower() == "movie" else "Show" if section_type.lower() == "show" else section_type.title()
+            section_name = "Movies" if section_type.lower() == "movie" else "TV Shows" if section_type.lower() == "show" else section_type.title()
             section = self.plex.library.section(section_name)
             collections = section.collections(maxresults=limit)
             out = []
