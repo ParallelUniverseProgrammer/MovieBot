@@ -31,9 +31,21 @@ class SharedHttpClient:
             connect=cfg.connect_timeout_ms / 1000.0,
             sock_read=cfg.read_timeout_ms / 1000.0,
         )
+        
+        # Enhanced connection pooling with keep-alive and connection reuse
+        connector = aiohttp.TCPConnector(
+            limit=cfg.max_connections,
+            limit_per_host=cfg.max_connections // 4,  # Distribute connections across hosts
+            keepalive_timeout=30,  # Keep connections alive for 30 seconds
+            enable_cleanup_closed=True,  # Clean up closed connections
+            ssl=False,
+            use_dns_cache=True,  # Cache DNS lookups
+            ttl_dns_cache=300,  # DNS cache TTL of 5 minutes
+        )
+        
         self._session = aiohttp.ClientSession(
             timeout=timeout,
-            connector=aiohttp.TCPConnector(limit=cfg.max_connections, ssl=False),
+            connector=connector,
             headers=base_headers or {},
         )
         self._cfg = cfg

@@ -69,7 +69,7 @@ class Agent:
         })
         return resp
 
-    def _run_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, max_iters: int | None = None) -> Any:
+    async def _run_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, max_iters: int | None = None) -> Any:
         # Load runtime config for loop controls
         rc = load_runtime_config(self.project_root)
         cfg_max_iters = int(rc.get("llm", {}).get("maxIters", 8))
@@ -110,7 +110,7 @@ class Agent:
                 except Exception:
                     pass  # Don't let progress updates break the main flow
             
-            last_response = self._chat_once(messages, model)
+            last_response = await self._achat_once(messages, model)
             choice = last_response.choices[0]
             msg = choice.message
             tool_calls = getattr(msg, "tool_calls", None)
@@ -130,94 +130,42 @@ class Agent:
                     for tc in tool_calls
                 ],
             })
-            # Execute tool calls concurrently with bounded parallelism
+            # Execute tool calls concurrently with bounded parallelism and batching
             rc = load_runtime_config(self.project_root)
             timeout_ms = int(rc.get("tools", {}).get("timeoutMs", 8000))
             parallelism = int(rc.get("tools", {}).get("parallelism", 4))
             retry_max = int(rc.get("tools", {}).get("retryMax", 2))
             backoff_base_ms = int(rc.get("tools", {}).get("backoffBaseMs", 200))
 
-            async def run_one(tc):
-                name = tc.function.name
-                args_json = tc.function.arguments or "{}"
-                self.log.info(f"tool call requested: {name}")
-                self.log.debug("tool args", extra={"name": name, "args": args_json})
-                
-                # Notify progress callback about tool execution
-                if self.progress_callback:
-                    try:
-                        self.progress_callback("tool", name)
-                    except Exception:
-                        pass
-                
-                # Parse args
-                try:
-                    args = json.loads(args_json)
-                except json.JSONDecodeError as e:
-                    payload = {"ok": False, "error": "invalid_json", "details": str(e)}
-                    return tc.id, name, payload, 0, False
-
-                # Execute with retries/backoff, timeout, and timing
-                attempt = 0
-                import time
-                start = time.monotonic()
-                cache_hit = False
-                last_err = None
-
-                async def attempt_once():
-                    try:
-                        return await asyncio.wait_for(self.tool_registry.get(name)(args), timeout=timeout_ms / 1000)
-                    except asyncio.TimeoutError as e:
-                        raise e
-
-                while True:
-                    try:
-                        result = await attempt_once()
-                        status = "ok"
-                        break
-                    except asyncio.TimeoutError as e:
-                        last_err = {"ok": False, "error": "timeout", "timeout_ms": timeout_ms, "name": name}
-                    except Exception as e:
-                        last_err = {"ok": False, "error": str(e)}
-                    if attempt >= retry_max:
-                        result = last_err
-                        status = "error"
-                        break
-                    # backoff with jitter
-                    jitter = (attempt + 1) * 0.1
-                    await asyncio.sleep((backoff_base_ms / 1000) * (2 ** attempt) + jitter)
-                    attempt += 1
-                duration_ms = int((time.monotonic() - start) * 1000)
-                self.log.info("tool done", extra={"name": name, "status": status, "duration_ms": duration_ms, "attempts": attempt + 1, "cache_hit": cache_hit})
-                return tc.id, name, result, attempt + 1, cache_hit
+            # Group tool calls by type for potential batching
+            tool_groups = self._group_tool_calls_for_batching(tool_calls)
+            
+            async def run_one_or_batch(tc_or_group):
+                if isinstance(tc_or_group, list):
+                    # Batch execution
+                    return await self._execute_tool_batch(tc_or_group, timeout_ms, retry_max, backoff_base_ms)
+                else:
+                    # Single tool execution
+                    return await self._execute_single_tool(tc_or_group, timeout_ms, retry_max, backoff_base_ms)
 
             # Run with bounded concurrency
             sem = asyncio.Semaphore(parallelism)
 
-            async def sem_wrapped(tc):
+            async def sem_wrapped(tc_or_group):
                 async with sem:
-                    return await run_one(tc)
+                    return await run_one_or_batch(tc_or_group)
 
-            async def run_all():
-                return await asyncio.gather(*[sem_wrapped(tc) for tc in tool_calls])
-
-            # Always spin a private loop in a new thread to avoid nested-loop issues
-            import threading
-
-            results_container = {}
-            def runner():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    results_container['results'] = loop.run_until_complete(run_all())
-                finally:
-                    loop.close()
-
-            t = threading.Thread(target=runner)
-            t.start()
-            t.join()
-            results = results_container.get('results', [])
-            for tool_call_id, name, result, attempts, cache_hit in results:
+            # Execute all tools (single or batched) concurrently
+            results = await asyncio.gather(*[sem_wrapped(tc_or_group) for tc_or_group in tool_groups])
+            
+            # Flatten results from batched executions
+            flattened_results = []
+            for result in results:
+                if isinstance(result, list):
+                    flattened_results.extend(result)
+                else:
+                    flattened_results.append(result)
+            for tool_call_id, name, result, attempts, cache_hit in flattened_results:
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
@@ -225,7 +173,7 @@ class Agent:
                     "content": json.dumps(result),
                 })
             # Finalization turn after tools: ask model to produce a user-facing reply
-            final_resp = self._chat_once(messages, model)
+            final_resp = await self._achat_once(messages, model)
             try:
                 final_tc = getattr(final_resp.choices[0].message, "tool_calls", None)
             except Exception:
@@ -243,6 +191,139 @@ class Agent:
             ]
         }
         return synthesized  # type: ignore[return-value]
+
+    def _group_tool_calls_for_batching(self, tool_calls: List[Any]) -> List[Any]:
+        """Group tool calls by type for potential batching.
+        
+        Returns a list where each element is either a single tool call or a list of tool calls
+        that can be executed as a batch.
+        """
+        # Group by tool name and similar parameters for potential batching
+        tool_groups = {}
+        
+        for tc in tool_calls:
+            name = tc.function.name
+            args = tc.function.arguments or "{}"
+            
+            # Create a key for grouping based on tool name and similar parameters
+            if name.startswith("tmdb_"):
+                # Group TMDB calls by type (search, details, etc.)
+                group_key = f"tmdb_{name.split('_', 1)[1]}"
+            elif name.startswith("plex_"):
+                # Group Plex calls by type
+                group_key = f"plex_{name.split('_', 1)[1]}"
+            elif name.startswith("radarr_") or name.startswith("sonarr_"):
+                # Group Radarr/Sonarr calls by type
+                group_key = f"{name.split('_', 1)[0]}_{name.split('_', 1)[1]}"
+            else:
+                # Keep other tools as single executions
+                group_key = name
+            
+            if group_key not in tool_groups:
+                tool_groups[group_key] = []
+            tool_groups[group_key].append(tc)
+        
+        # Convert to list format, keeping single tools as-is and grouping similar ones
+        result = []
+        for group_key, tools in tool_groups.items():
+            if len(tools) == 1:
+                result.append(tools[0])  # Single tool
+            elif len(tools) > 1 and self._can_batch_tools(tools):
+                result.append(tools)  # Batchable group
+            else:
+                # Can't batch, add individually
+                result.extend(tools)
+        
+        return result
+
+    def _can_batch_tools(self, tools: List[Any]) -> bool:
+        """Check if a group of tools can be executed as a batch."""
+        if len(tools) < 2:
+            return False
+        
+        # Check if all tools have the same name and similar structure
+        first_tool = tools[0]
+        first_name = first_tool.function.name
+        
+        for tool in tools[1:]:
+            if tool.function.name != first_name:
+                return False
+        
+        # Only batch certain tool types that support it
+        batchable_tools = {
+            "tmdb_search", "tmdb_discover_movies", "tmdb_discover_tv",
+            "plex_search", "get_plex_library_sections"
+        }
+        
+        return first_name in batchable_tools
+
+    async def _execute_single_tool(self, tc: Any, timeout_ms: int, retry_max: int, backoff_base_ms: int) -> tuple:
+        """Execute a single tool with retries and timing."""
+        name = tc.function.name
+        args_json = tc.function.arguments or "{}"
+        self.log.info(f"tool call requested: {name}")
+        self.log.debug("tool args", extra={"name": name, "args": args_json})
+        
+        # Notify progress callback about tool execution
+        if self.progress_callback:
+            try:
+                self.progress_callback("tool", name)
+            except Exception:
+                pass
+        
+        # Parse args
+        try:
+            args = json.loads(args_json)
+        except json.JSONDecodeError as e:
+            payload = {"ok": False, "error": "invalid_json", "details": str(e)}
+            return tc.id, name, payload, 0, False
+
+        # Execute with retries/backoff, timeout, and timing
+        attempt = 0
+        import time
+        start = time.monotonic()
+        cache_hit = False
+        last_err = None
+
+        async def attempt_once():
+            try:
+                return await asyncio.wait_for(self.tool_registry.get(name)(args), timeout=timeout_ms / 1000)
+            except asyncio.TimeoutError as e:
+                raise e
+
+        while True:
+            try:
+                result = await attempt_once()
+                status = "ok"
+                break
+            except asyncio.TimeoutError as e:
+                last_err = {"ok": False, "error": "timeout", "timeout_ms": timeout_ms, "name": name}
+            except Exception as e:
+                last_err = {"ok": False, "error": str(e)}
+            if attempt >= retry_max:
+                result = last_err
+                status = "error"
+                break
+            # backoff with jitter
+            jitter = (attempt + 1) * 0.1
+            await asyncio.sleep((backoff_base_ms / 1000) * (2 ** attempt) + jitter)
+            attempt += 1
+        duration_ms = int((time.monotonic() - start) * 1000)
+        self.log.info("tool done", extra={"name": name, "status": status, "duration_ms": duration_ms, "attempts": attempt + 1, "cache_hit": cache_hit})
+        return tc.id, name, result, attempt + 1, cache_hit
+
+    async def _execute_tool_batch(self, tool_batch: List[Any], timeout_ms: int, retry_max: int, backoff_base_ms: int) -> List[tuple]:
+        """Execute a batch of similar tools concurrently."""
+        if not tool_batch:
+            return []
+        
+        # Execute all tools in the batch concurrently
+        batch_results = await asyncio.gather(*[
+            self._execute_single_tool(tc, timeout_ms, retry_max, backoff_base_ms)
+            for tc in tool_batch
+        ])
+        
+        return batch_results
 
     async def _arun_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, max_iters: int | None = None) -> Any:
         """Async version of _run_tools_loop for non-blocking operations."""
@@ -306,78 +387,43 @@ class Agent:
                     for tc in tool_calls
                 ],
             })
-            # Execute tool calls concurrently with bounded parallelism
+            # Execute tool calls concurrently with bounded parallelism and batching
             rc = load_runtime_config(self.project_root)
             timeout_ms = int(rc.get("tools", {}).get("timeoutMs", 8000))
             parallelism = int(rc.get("tools", {}).get("parallelism", 4))
             retry_max = int(rc.get("tools", {}).get("retryMax", 2))
             backoff_base_ms = int(rc.get("tools", {}).get("backoffBaseMs", 200))
 
-            async def run_one(tc):
-                name = tc.function.name
-                args_json = tc.function.arguments or "{}"
-                self.log.info(f"tool call requested: {name}")
-                self.log.debug("tool args", extra={"name": name, "args": args_json})
-                
-                # Notify progress callback about tool execution
-                if self.progress_callback:
-                    try:
-                        self.progress_callback("tool", name)
-                    except Exception:
-                        pass
-                
-                # Parse args
-                try:
-                    args = json.loads(args_json)
-                except json.JSONDecodeError as e:
-                    payload = {"ok": False, "error": "invalid_json", "details": str(e)}
-                    return tc.id, name, payload, 0, False
-
-                # Execute with retries/backoff, timeout, and timing
-                attempt = 0
-                import time
-                start = time.monotonic()
-                cache_hit = False
-                last_err = None
-
-                async def attempt_once():
-                    try:
-                        return await asyncio.wait_for(self.tool_registry.get(name)(args), timeout=timeout_ms / 1000)
-                    except asyncio.TimeoutError as e:
-                        raise e
-
-                while True:
-                    try:
-                        result = await attempt_once()
-                        status = "ok"
-                        break
-                    except asyncio.TimeoutError as e:
-                        last_err = {"ok": False, "error": "timeout", "timeout_ms": timeout_ms, "name": name}
-                    except Exception as e:
-                        last_err = {"ok": False, "error": str(e)}
-                    if attempt >= retry_max:
-                        result = last_err
-                        status = "error"
-                        break
-                    # backoff with jitter
-                    jitter = (attempt + 1) * 0.1
-                    await asyncio.sleep((backoff_base_ms / 1000) * (2 ** attempt) + jitter)
-                    attempt += 1
-                duration_ms = int((time.monotonic() - start) * 1000)
-                self.log.info("tool done", extra={"name": name, "status": status, "duration_ms": duration_ms, "attempts": attempt + 1, "cache_hit": cache_hit})
-                return tc.id, name, result, attempt + 1, cache_hit
+            # Group tool calls by type for potential batching
+            tool_groups = self._group_tool_calls_for_batching(tool_calls)
+            
+            async def run_one_or_batch(tc_or_group):
+                if isinstance(tc_or_group, list):
+                    # Batch execution
+                    return await self._execute_tool_batch(tc_or_group, timeout_ms, retry_max, backoff_base_ms)
+                else:
+                    # Single tool execution
+                    return await self._execute_single_tool(tc_or_group, timeout_ms, retry_max, backoff_base_ms)
 
             # Run with bounded concurrency
             sem = asyncio.Semaphore(parallelism)
 
-            async def sem_wrapped(tc):
+            async def sem_wrapped(tc_or_group):
                 async with sem:
-                    return await run_one(tc)
+                    return await run_one_or_batch(tc_or_group)
 
-            # Execute all tool calls concurrently
-            results = await asyncio.gather(*[sem_wrapped(tc) for tc in tool_calls])
+            # Execute all tools (single or batched) concurrently
+            results = await asyncio.gather(*[sem_wrapped(tc_or_group) for tc_or_group in tool_groups])
             
-            for tool_call_id, name, result, attempts, cache_hit in results:
+            # Flatten results from batched executions
+            flattened_results = []
+            for result in results:
+                if isinstance(result, list):
+                    flattened_results.extend(result)
+                else:
+                    flattened_results.append(result)
+            
+            for tool_call_id, name, result, attempts, cache_hit in flattened_results:
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
@@ -410,7 +456,27 @@ class Agent:
             model = "z-ai/glm-4.5-air:free"  # Use the free GLM 4.5 Air model for conversations
         else:
             model = "gpt-5-mini"  # Fallback to OpenAI model
-        return self._run_tools_loop(messages, model=model)
+        # Use async version to avoid threading overhead
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If we're already in an async context, create a new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    return loop.run_until_complete(self._run_tools_loop(messages, model=model))
+                finally:
+                    loop.close()
+            else:
+                return loop.run_until_complete(self._run_tools_loop(messages, model=model))
+        except RuntimeError:
+            # No event loop, create one
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(self._run_tools_loop(messages, model=model))
+            finally:
+                loop.close()
 
     async def aconverse(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         """Async version of converse for non-blocking operations."""
@@ -427,7 +493,27 @@ class Agent:
             model = "z-ai/glm-4.5-air:free"  # Use the free GLM 4.5 Air model for recommendations
         else:
             model = "gpt-5"  # Fallback to OpenAI model
-        return self._run_tools_loop(messages, model=model)
+        # Use async version to avoid threading overhead
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If we're already in an async context, create a new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    return loop.run_until_complete(self._run_tools_loop(messages, model=model))
+                finally:
+                    loop.close()
+            else:
+                return loop.run_until_complete(self._run_tools_loop(messages, model=model))
+        except RuntimeError:
+            # No event loop, create one
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(self._run_tools_loop(messages, model=model))
+            finally:
+                loop.close()
 
     async def arecommend(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         """Async version of recommend for non-blocking operations."""

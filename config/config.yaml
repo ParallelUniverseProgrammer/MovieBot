@@ -9,18 +9,18 @@ sonarr:
 llm:
   maxIters: 8
 tools:
-  timeoutMs: 8000
-  parallelism: 4
-  retryMax: 2
-  backoffBaseMs: 200
+  timeoutMs: 6000  # Reduced from 8000ms for faster failure detection
+  parallelism: 6   # Increased from 4 for better concurrency
+  retryMax: 1      # Reduced from 2 for faster failure
+  backoffBaseMs: 100  # Reduced from 200ms for faster retries
 ux:
-  progressThresholdMs: 2000
-  progressUpdateIntervalMs: 2000
-  progressUpdateFrequency: 4
+  progressThresholdMs: 3000  # Increased from 2000ms to reduce unnecessary progress messages
+  progressUpdateIntervalMs: 5000  # Increased from 2000ms to reduce update frequency
+  progressUpdateFrequency: 2  # Reduced from 4 to reduce overhead
 http:
-  connectTimeoutMs: 3000
-  readTimeoutMs: 10000
-  totalTimeoutMs: 15000
+  connectTimeoutMs: 2000  # Reduced from 3000ms for faster connection failures
+  readTimeoutMs: 8000     # Reduced from 10000ms for faster read timeouts
+  totalTimeoutMs: 12000   # Reduced from 15000ms for faster total timeouts
   maxConnections: 100
 cache:
   ttlShortSec: 60

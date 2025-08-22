@@ -293,9 +293,9 @@ class MovieBotClient(discord.Client):
         
         try:
             async with message.channel.typing():
-                # Show a progress note if it takes too long
+                # Show a progress note if it takes too long - optimized threshold
                 rc = load_runtime_config(self.project_root)  # type: ignore[attr-defined]
-                progress_ms = int(rc.get("ux", {}).get("progressThresholdMs", 5000))
+                progress_ms = int(rc.get("ux", {}).get("progressThresholdMs", 3000))  # Reduced from 5000ms for faster feedback
                 done = asyncio.Event()
 
                 async def progress_updater():
@@ -316,9 +316,9 @@ class MovieBotClient(discord.Client):
                             last_tool = None
                             last_progress_type = None
                             
-                            # Get update interval from config
-                            update_interval = int(rc.get("ux", {}).get("progressUpdateIntervalMs", 2000)) / 1000
-                            update_frequency = int(rc.get("ux", {}).get("progressUpdateFrequency", 4))
+                            # Get update interval from config - optimized for better performance
+                            update_interval = int(rc.get("ux", {}).get("progressUpdateIntervalMs", 5000)) / 1000  # Increased from 2000ms
+                            update_frequency = int(rc.get("ux", {}).get("progressUpdateFrequency", 2))  # Reduced from 4
                             
                             while not done.is_set():
                                 try:
@@ -330,7 +330,8 @@ class MovieBotClient(discord.Client):
                                     tool_changed = current_tool != last_tool
                                     progress_type_changed = current_progress_type != last_progress_type
                                     
-                                    if tool_changed or progress_type_changed or iteration % update_frequency == 0:  # Update on changes or based on frequency
+                                    # Only update on significant changes or based on frequency to reduce overhead
+                                    if tool_changed or progress_type_changed or iteration % update_frequency == 0:
                                         # Generate new message based on current state
                                         new_message = _get_clever_progress_message(  # type: ignore[attr-defined]
                                             iteration, 
@@ -338,7 +339,7 @@ class MovieBotClient(discord.Client):
                                             current_progress_type
                                         )
                                         
-                                        # Only edit if the message actually changed
+                                        # Only edit if the message actually changed to avoid unnecessary API calls
                                         if new_message != progress_message.content:
                                             await progress_message.edit(content=new_message)
                                         
