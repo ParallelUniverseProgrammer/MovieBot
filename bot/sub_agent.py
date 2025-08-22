@@ -142,7 +142,7 @@ Remember: Search for ALL episodes, not just some of them!
         if hasattr(self.llm, 'provider') and self.llm.provider == "openrouter":
             model = "z-ai/glm-4.5-air:free"
         else:
-            model = "gpt-4o-mini"
+            model = "gpt-5-nano"
 
         # Single iteration for focused task
         response = self._chat_once(messages, model)
@@ -281,7 +281,7 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
         if hasattr(self.llm, 'provider') and self.llm.provider == "openrouter":
             model = "z-ai/glm-4.5-air:free"
         else:
-            model = "gpt-4o-mini"
+            model = "gpt-5-nano"
 
         response = self._chat_once(messages, model)
         

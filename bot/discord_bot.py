@@ -25,170 +25,194 @@ def ephemeral_embed(title: str, description: str) -> discord.Embed:
     return embed
 
 
-def _get_clever_progress_message(iteration: int, tool_name: str = None, progress_type: str = None) -> str:
-    """Generate clever, opaque progress messages that hint at what's happening."""
-    messages = [
-        "Working on it — checking services…",
-        "Still working — consulting the digital oracle…",
-        "Processing… like a librarian on caffeine…",
-        "Analyzing… because details matter…",
-        "Thinking… but not too hard…",
-        "Computing… one bit at a time…",
-        "Processing… patience is a virtue…",
-        "Working… like a well-oiled machine…",
-        "Analyzing… because magic takes time…",
-        "Processing… gathering digital wisdom…",
-        "Thinking… but not overthinking…",
-        "Computing… because algorithms are patient…",
-        "Working… like a digital detective…",
-        "Processing… one request at a time…",
-        "Analyzing… because quality takes time…",
-        "Working… like a film critic with a deadline…",
-        "Processing… because good taste can't be rushed…",
-        "Thinking… like a movie buff in a library…",
-        "Computing… one frame at a time…",
-        "Analyzing… because every detail tells a story…",
-        "Working… like a director in the editing room…",
-        "Processing… because perfection takes time…",
-        "Thinking… like a screenwriter with writer's block…",
-        "Computing… because algorithms have feelings too…",
-        "Analyzing… like a film student studying classics…",
-        "Working… because the show must go on…",
-        "Processing… like a popcorn machine warming up…",
-        "Thinking… because good recommendations are worth waiting for…",
-        "Computing… like a film projector loading reels…",
-        "Analyzing… because every movie has its moment…",
-        "Working… like a film archivist organizing classics…",
-        "Processing… because quality entertainment takes effort…",
+def _get_clever_progress_message(
+    iteration: int, tool_name: str = None, progress_type: str = None
+) -> str:
+    """Generate clever, opaque progress messages that hint at what's happening.
+    Same signature and compatible tool keys. Funnier, sturdier selection logic.
+    """
+    import random
+
+    def _norm(s):
+        return (s or "").strip().lower()
+
+    n_tool = _norm(tool_name)
+    n_type = _norm(progress_type)
+
+    # Stable-ish randomness so the same (iteration/tool/type) won't jitter
+    seed = 0x9E3779B97F4A7C15
+    for ch in f"{iteration}|{n_tool}|{n_type}":
+        seed = (seed ^ ord(ch)) * 0x100000001B3 & ((1 << 64) - 1)
+    rng = random.Random(seed)
+
+    base_messages = [
+        "Calibrating taste sensors… please hold your applause…",
+        "Sharpening algorithms with safety scissors…",
+        "Letting the cache stretch its legs…",
+        "Negotiating with the progress bar union…",
+        "Politely asking the servers to be fast for once…",
+        "Warming up the recommendation cauldron…",
+        "Reading tea leaves, but they’re JSON…",
+        "Making shapes in the cloud look like answers…",
+        "Teaching the model not to pick the same three blockbusters…",
+        "Re-indexing the vibes…",
+        "Untangling spaghetti queries…",
+        "Buffering wit… and bits…",
     ]
-    
-    # Tool-specific hints for more intelligent progress
-    if tool_name:
-        tool_hints = {
-            "tmdb": "consulting the movie database…",
-            "plex": "checking your personal library…",
-            "radarr": "scanning the movie collection…",
-            "sonarr": "browsing the TV series…",
-            "preferences": "checking your taste profile…",
-            "search": "searching through the archives…",
-            "recommendations": "finding the perfect match…",
-            "discover": "uncovering hidden gems…",
-            "trending": "checking what's hot right now…",
-            "popular": "seeing what everyone's watching…",
-            "similar": "finding lookalikes…",
-            "details": "gathering the fine print…",
-            "collections": "browsing curated sets…",
-            "playlists": "checking your custom lists…",
-            "history": "reviewing your journey…",
-            "status": "checking current state…",
-            "health": "running diagnostics…",
-            "queue": "checking the waiting list…",
-            "wanted": "scanning wishlists…",
-            "calendar": "checking the schedule…",
-            "blacklist": "filtering out the bad stuff…",
-            "indexers": "consulting search engines…",
-            "download": "checking transfer status…",
-            "system": "running system checks…",
-            "disk": "checking storage space…",
-            "quality": "verifying quality settings…",
-            "folders": "scanning directories…",
-            "episodes": "browsing episode lists…",
-            "seasons": "checking season info…",
-            "series": "analyzing show details…",
-            "monitor": "setting up alerts…",
-            "missing": "finding what's not there…",
-            "cutoff": "checking quality thresholds…",
-            "extras": "looking for bonus content…",
-            "playback": "checking what's playing…",
-            "file": "examining file details…",
-            "fallback": "finding alternatives…",
-            # More specific and clever tool hints
-            "tmdb_search": "searching the movie database like a film detective…",
-            "tmdb_recommendations": "asking the algorithm for its best picks…",
-            "tmdb_discover": "unearthing cinematic treasures…",
-            "tmdb_trending": "checking what's making waves in Hollywood…",
-            "tmdb_popular": "seeing what the masses are watching…",
-            "tmdb_top_rated": "consulting the critics' choice…",
-            "tmdb_upcoming": "peeking into the future of cinema…",
-            "tmdb_now_playing": "checking what's currently in theaters…",
-            "tmdb_on_the_air": "seeing what's currently on TV…",
-            "tmdb_airing_today": "checking today's TV lineup…",
-            "tmdb_movie_details": "reading the fine print on that film…",
-            "tmdb_tv_details": "getting the scoop on that show…",
-            "tmdb_similar": "finding cinematic soulmates…",
-            "tmdb_genres": "browsing by category…",
-            "tmdb_collection": "checking out the franchise…",
-            "tmdb_watch_providers": "finding where you can watch it…",
-            "plex_search": "searching your personal movie vault…",
-            "plex_library": "browsing your collection…",
-            "plex_recently_added": "checking what's new in your library…",
-            "plex_on_deck": "seeing what's next in your queue…",
-            "plex_continue_watching": "finding where you left off…",
-            "plex_unwatched": "discovering unwatched gems…",
-            "plex_collections": "browsing your curated sets…",
-            "plex_playlists": "checking your custom lists…",
-            "plex_rating": "updating your personal rating…",
-            "plex_playback": "checking what's currently playing…",
-            "plex_history": "reviewing your viewing journey…",
-            "radarr_lookup": "looking up movie information…",
-            "radarr_add": "adding to your movie collection…",
-            "radarr_search": "searching for movie files…",
-            "radarr_queue": "checking your download queue…",
-            "radarr_wanted": "scanning your wishlist…",
-            "radarr_calendar": "checking your movie schedule…",
-            "sonarr_lookup": "looking up TV show information…",
-            "sonarr_add": "adding to your TV collection…",
-            "sonarr_search": "searching for TV episodes…",
-            "sonarr_queue": "checking your download queue…",
-            "sonarr_wanted": "scanning your TV wishlist…",
-            "sonarr_calendar": "checking your TV schedule…",
-            "sonarr_monitor": "setting up episode monitoring…",
-            "sonarr_episodes": "browsing episode lists…",
-            "sonarr_seasons": "checking season information…",
-            "household_preferences": "checking your family's taste profile…",
-            "household_search": "searching through your preferences…",
-            "household_update": "updating your taste settings…",
-            "household_query": "consulting your preference database…",
-        }
-        
-        for tool_key, hint in tool_hints.items():
-            if tool_key in tool_name.lower():
-                return f"Still working — {hint}"
-    
-    # Progress type-specific messages
-    if progress_type == "thinking":
-        thinking_messages = [
-            "Thinking… processing your request…",
-            "Analyzing… considering the options…",
-            "Computing… working through the logic…",
-            "Processing… connecting the dots…",
-            "Thinking… because good answers take time…",
-            "Thinking… like a film critic analyzing a plot…",
-            "Analyzing… because every request is unique…",
-            "Computing… like a movie algorithm with taste…",
-            "Processing… because good recommendations need thought…",
-            "Thinking… because your entertainment matters…",
+
+    thinking_messages = [
+        "Thinking… assembling a thought that won’t age poorly…",
+        "Analyzing… separating signal from blockbuster noise…",
+        "Computing… allocating two brain cells and a dream…",
+        "Processing… connecting plot threads and data threads…",
+        "Thinking… consulting the vibe oracle…",
+        "Analyzing… because taste is a dataset and a journey…",
+        "Computing… removing duplicates and bad takes…",
+        "Processing… one clever synapse at a time…",
+        "Thinking… pausing for dramatic effect…",
+        "Analyzing… rerouting around clichés…",
+    ]
+
+    def _iter_message(i: int) -> str:
+        bank = [
+            f"Still working — step {i} of ‘soon’…",
+            f"Progress update: iteration {i}. Morale: high.",
+            f"Grinding politely — pass {i} through the gauntlet…",
+            f"Iteration {i}… we chose violence against bugs.",
+            f"Step {i}… trimming the hedges, not the corners…",
+            f"Iteration {i}… refining, refactoring, rejoicing…",
+            f"Step {i}… like a montage, but with APIs…",
+            f"Iteration {i}… closer than the last one, promise…",
+            f"Pass {i}… inspecting edge cases with a magnifying glass…",
+            f"Still working — lap {i} around the data track…",
         ]
-        return random.choice(thinking_messages)
-    
-    # Iteration-specific messages for better progress tracking
-    if iteration > 1:
-        iteration_messages = [
-            f"Still working — step {iteration} of the process…",
-            f"Processing… iteration {iteration} and counting…",
-            f"Working through it — step {iteration}…",
-            f"Analyzing… this is step {iteration}…",
-            f"Computing… iteration {iteration} in progress…",
-            f"Processing… step {iteration} of the journey…",
-            f"Thinking… iteration {iteration} and still going…",
-            f"Working… step {iteration} and not giving up…",
-            f"Analyzing… iteration {iteration} and counting…",
-            f"Processing… step {iteration} of the adventure…",
-        ]
-        return random.choice(iteration_messages)
-    
-    # Return a random message for variety
-    return random.choice(messages)
+        # Nudge tone based on how deep we are
+        if i >= 8:
+            bank.append(f"Iteration {i}… we’re in too deep to bail now…")
+        elif i >= 4:
+            bank.append(f"Iteration {i}… mid-flight course correction…")
+        else:
+            bank.append(f"Step {i}… warming up the clever bit…")
+        return rng.choice(bank)
+
+    # Tool-specific hints (keys preserved for compatibility)
+    tool_hints = {
+        "tmdb": "bribing the movie database with virtual popcorn…",
+        "plex": "dusting your Plex shelves like a neat freak…",
+        "radarr": "lighting the Radarr signal for fresh cinema…",
+        "sonarr": "herding episodes into the right pens…",
+        "preferences": "peeking at your taste DNA (no judgment)…",
+        "search": "opening a wormhole to find the good stuff…",
+        "recommendations": "playing matchmaker between you and a great watch…",
+        "discover": "digging for sleeper hits with a tiny shovel…",
+        "trending": "checking what the herd is stampeding toward…",
+        "popular": "seeing what the algorithm thinks is for ‘everyone’…",
+        "similar": "finding cinematic cousins…",
+        "details": "reading the small print so you don’t have to…",
+        "collections": "arranging franchises alphabetically and spiritually…",
+        "playlists": "DJ‑ing your watchlist…",
+        "history": "time‑traveling through your viewing past…",
+        "status": "taking the system’s pulse…",
+        "health": "asking the system to say ‘ahh’…",
+        "queue": "peeking at the download conga line…",
+        "wanted": "checking the ‘bring me this’ list…",
+        "calendar": "syncing with the space‑time continuum…",
+        "blacklist": "banishing the unworthy to the shadow realm…",
+        "indexers": "whispering sweet nothings to search engines…",
+        "download": "watching the progress bar inch heroically…",
+        "system": "appeasing the machine spirits…",
+        "disk": "measuring free space with a tiny ruler…",
+        "quality": "negotiating with the Quality Council…",
+        "folders": "spelunking through directories…",
+        "episodes": "lining up episodes like very obedient ducks…",
+        "seasons": "stacking seasons into tidy arcs…",
+        "series": "annotating show lore like a trivia goblin…",
+        "monitor": "arming tripwires for new releases…",
+        "missing": "playing hide‑and‑seek with files…",
+        "cutoff": "checking if the bar is set high enough…",
+        "extras": "hunting for bloopers and shiny nuggets…",
+        "playback": "making sure the play button actually plays…",
+        "file": "sniffing file metadata like a sommelier…",
+        "fallback": "crafting Plan B (and C)…",
+        "tmdb_search": "interrogating TMDB with leading questions…",
+        "tmdb_recommendations": "asking TMDB for vibes, not just stats…",
+        "tmdb_discover": "unearthing cinematic treasures…",
+        "tmdb_trending": "checking what’s making waves this minute…",
+        "tmdb_popular": "seeing what the masses are binging…",
+        "tmdb_top_rated": "consulting the critics’ pantheon…",
+        "tmdb_upcoming": "peeking at the near future of cinema…",
+        "tmdb_now_playing": "checking what’s on the big screens…",
+        "tmdb_on_the_air": "seeing what’s currently airing…",
+        "tmdb_airing_today": "checking today’s TV lineup…",
+        "tmdb_movie_details": "reading the fine print on that film…",
+        "tmdb_tv_details": "getting the scoop on that show…",
+        "tmdb_similar": "finding cinematic soulmates…",
+        "tmdb_genres": "browsing by vibe and genre…",
+        "tmdb_collection": "checking the franchise family tree…",
+        "tmdb_watch_providers": "finding where it’s actually watchable…",
+        "plex_search": "rifling through your personal vault…",
+        "plex_library": "browsing your shelves with white gloves…",
+        "plex_recently_added": "peeking at the latest arrivals…",
+        "plex_on_deck": "lining up what’s next on deck…",
+        "plex_continue_watching": "finding where you left the remote…",
+        "plex_unwatched": "dusting off the unseen gems…",
+        "plex_collections": "admiring your curated sets…",
+        "plex_playlists": "checking your custom mixes…",
+        "plex_rating": "updating your royal decree (rating)…",
+        "plex_playback": "ensuring smooth, buttery playback…",
+        "plex_history": "reviewing your heroic viewing saga…",
+        "radarr_lookup": "looking up movie intel…",
+        "radarr_add": "adding a fresh title to the vault…",
+        "radarr_search": "hunting down the right files…",
+        "radarr_queue": "auditing the download queue…",
+        "radarr_wanted": "scanning the wishboard…",
+        "radarr_calendar": "syncing cinema with your calendar…",
+        "sonarr_lookup": "looking up show dossiers…",
+        "sonarr_add": "enrolling a new series into the fold…",
+        "sonarr_search": "searching for the right episodes…",
+        "sonarr_queue": "checking the TV download queue…",
+        "sonarr_wanted": "scanning the episode wishlist…",
+        "sonarr_calendar": "syncing TV time with real time…",
+        "sonarr_monitor": "setting up episode surveillance…",
+        "sonarr_episodes": "browsing the episode roster…",
+        "sonarr_seasons": "double‑checking season intel…",
+        "household_preferences": "consulting your household taste genome…",
+        "household_search": "searching across family tastes…",
+        "household_update": "refreshing your taste presets…",
+        "household_query": "querying the household preference archive…",
+    }
+
+    def _match_tool_hint(name: str):
+        if not name:
+            return None
+        # Prefer the longest key that matches to avoid over-broad hits
+        for key in sorted(tool_hints.keys(), key=len, reverse=True):
+            if key in name or name in key:
+                return tool_hints[key]
+        return None
+
+    hint = _match_tool_hint(n_tool)
+
+    # Decision logic:
+    # 1) If explicitly "thinking", do that.
+    if n_type == "thinking":
+        # Occasionally pair with a hint for extra context
+        if hint and rng.random() < 0.35:
+            core = rng.choice(thinking_messages)
+            clean_hint = hint[:-1] if hint.endswith("…") else hint
+            return f"{core} ({clean_hint})"
+        return rng.choice(thinking_messages)
+
+    # 2) If we have a tool hint, use it most of the time.
+    if hint and rng.random() < 0.7:
+        return f"Still working — {hint}"
+
+    # 3) If multiple passes, show iteration-aware messages.
+    if isinstance(iteration, int) and iteration > 1:
+        return _iter_message(iteration)
+
+    # 4) Otherwise fall back to base messages.
+    return rng.choice(base_messages)
 
 
 class MovieBotClient(discord.Client):

@@ -39,7 +39,7 @@ async def demo_async_llm():
     try:
         # Async call - non-blocking
         response = await llm_client.achat(
-            model="gpt-4o-mini",
+            model="gpt-5-nano",
             messages=messages,
             temperature=0.7
         )
@@ -79,7 +79,7 @@ async def demo_async_llm():
         tasks = []
         for i in range(3):
             task = llm_client.achat(
-                model="gpt-4o-mini",
+                model="gpt-5-nano",
                 messages=[{"role": "user", "content": f"Count to {i+1} in words."}],
                 temperature=0.7
             )
