@@ -47,7 +47,7 @@ async def test_invalid_json_args_triggers_error_and_finalization(tmp_path: Path,
         tools, reg = build_openai_tools_and_registry(project_root, llm)
         return tools, reg
 
-    monkeypatch.setattr("bot.agent.LLMClient", lambda api_key: dummy_llm)
+    monkeypatch.setattr("bot.agent.LLMClient", lambda api_key, provider="openai": dummy_llm)
 
     agent = Agent(api_key="x", project_root=tmp_path)
     # Provide minimal base messages
@@ -67,7 +67,7 @@ async def test_tool_timeout_leads_to_finalization(tmp_path: Path, monkeypatch):
     second = mk_choice(content="All good", tool_calls=None)
 
     dummy_llm = DummyLLM([first, second])
-    monkeypatch.setattr("bot.agent.LLMClient", lambda api_key: dummy_llm)
+    monkeypatch.setattr("bot.agent.LLMClient", lambda api_key, provider="openai": dummy_llm)
 
     # Force very small timeout via config
     cfg = tmp_path / "config" / "config.yaml"

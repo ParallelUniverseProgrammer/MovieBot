@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 class Settings:
     discord_token: Optional[str]
     openai_api_key: Optional[str]
+    openrouter_api_key: Optional[str]
     plex_base_url: str
     plex_token: Optional[str]
     radarr_base_url: str
@@ -31,6 +32,7 @@ def load_settings(project_root: Path) -> Settings:
     return Settings(
         discord_token=os.getenv("DISCORD_TOKEN"),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
         plex_base_url=os.getenv("PLEX_BASE_URL", "http://localhost:32400"),
         plex_token=os.getenv("PLEX_TOKEN"),
         radarr_base_url=os.getenv("RADARR_BASE_URL", "http://localhost:7878"),

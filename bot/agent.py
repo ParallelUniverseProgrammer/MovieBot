@@ -15,8 +15,8 @@ from config.loader import load_runtime_config
 
 
 class Agent:
-    def __init__(self, *, api_key: str, project_root: Path):
-        self.llm = LLMClient(api_key)
+    def __init__(self, *, api_key: str, project_root: Path, provider: str = "openai"):
+        self.llm = LLMClient(api_key, provider=provider)
         self.openai_tools, self.tool_registry = build_openai_tools_and_registry(project_root, self.llm)
         self.project_root = project_root
         self.log = logging.getLogger("moviebot.agent")
@@ -51,7 +51,15 @@ class Agent:
         iters = max_iters or cfg_max_iters
         # System message + optional dynamic household preferences context (for recommendations)
         messages: List[Dict[str, Any]] = [{"role": "system", "content": AGENT_SYSTEM_PROMPT}]
-        if model == "gpt-5":
+        
+        # Check if we should add household preferences context
+        # For OpenAI GPT-5 models or OpenRouter models that support reasoning
+        should_add_prefs = (
+            model == "gpt-5" or 
+            (hasattr(self.llm, 'provider') and self.llm.provider == "openrouter" and "glm-4.5" in model)
+        )
+        
+        if should_add_prefs:
             try:
                 prefs_path = self.project_root / "data" / "household_preferences.json"
                 with open(prefs_path, "r", encoding="utf-8") as f:
@@ -196,9 +204,19 @@ class Agent:
         return synthesized  # type: ignore[return-value]
 
     def converse(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
-        return self._run_tools_loop(messages, model="gpt-5-mini")
+        # Choose appropriate model based on provider
+        if hasattr(self.llm, 'provider') and self.llm.provider == "openrouter":
+            model = "z-ai/glm-4.5-air:free"  # Use the free GLM 4.5 Air model for conversations
+        else:
+            model = "gpt-5-mini"  # Fallback to OpenAI model
+        return self._run_tools_loop(messages, model=model)
 
     def recommend(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
-        return self._run_tools_loop(messages, model="gpt-5")
+        # Choose appropriate model based on provider
+        if hasattr(self.llm, 'provider') and self.llm.provider == "openrouter":
+            model = "z-ai/glm-4.5-air:free"  # Use the free GLM 4.5 Air model for recommendations
+        else:
+            model = "gpt-5"  # Fallback to OpenAI model
+        return self._run_tools_loop(messages, model=model)
 
 

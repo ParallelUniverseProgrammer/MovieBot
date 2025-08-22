@@ -1314,7 +1314,7 @@ def make_search_household_preferences(project_root: Path) -> Callable[[dict], Aw
 
 
 def make_query_household_preferences(project_root: Path, llm_client) -> Callable[[dict], Awaitable[dict]]:
-    """Query household preferences using GPT-5-nano and return a concise one-sentence response."""
+    """Query household preferences using available LLM and return a concise one-sentence response."""
     async def impl(args: dict) -> dict:
         query = str(args.get("query", "")).strip()
         if not query:
@@ -1335,7 +1335,13 @@ def make_query_household_preferences(project_root: Path, llm_client) -> Callable
             flat = _flatten(data)
             compact = "; ".join(f"{k}: {v}" for k, v in flat[:100])
         
-        # Prepare the prompt for GPT-5-nano
+        # Choose model based on provider
+        if hasattr(llm_client, 'provider') and llm_client.provider == "openrouter":
+            model = "z-ai/glm-4.5-air:free"  # Use the free GLM 4.5 Air model
+        else:
+            model = "gpt-5-nano"  # Fallback to OpenAI model
+        
+        # Prepare the prompt for the selected model
         system_message = {
             "role": "system",
             "content": "You are a helpful assistant that answers questions about household movie preferences. Based on the preferences provided, answer the user's question in exactly one sentence. Be concise and specific. Do not include explanations or additional context - just the direct answer."
@@ -1349,7 +1355,7 @@ def make_query_household_preferences(project_root: Path, llm_client) -> Callable
         try:
             # Call the synchronous LLM client
             response = llm_client.chat(
-                model="gpt-5-nano",
+                model=model,
                 messages=[system_message, user_message],
                 temperature=1,   # Limit to ensure single sentence
             )

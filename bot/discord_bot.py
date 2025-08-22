@@ -76,9 +76,23 @@ def build_client() -> MovieBotClient:
             content = mention_pattern.sub("", content).strip()
         if not content:
             return
-        CONVERSATIONS.add_user(conv_id, content)
+        
         settings = load_settings(client.project_root)  # type: ignore[attr-defined]
-        agent = Agent(api_key=settings.openai_api_key or "", project_root=client.project_root)  # type: ignore[arg-type]
+        
+        # Choose provider: OpenRouter if available, otherwise OpenAI
+        if settings.openrouter_api_key:
+            api_key = settings.openrouter_api_key
+            provider = "openrouter"
+        else:
+            api_key = settings.openai_api_key or ""
+            provider = "openai"
+        
+        agent = Agent(api_key=api_key, project_root=client.project_root, provider=provider)  # type: ignore[arg-type]
+        
+        # Set the LLM client in the conversation store for token counting
+        CONVERSATIONS.set_llm_client(agent.llm)
+        
+        CONVERSATIONS.add_user(conv_id, content)
         log.info("incoming message", extra={
             "channel_id": conv_id,
             "author": str(message.author),
@@ -88,6 +102,15 @@ def build_client() -> MovieBotClient:
         # Run blocking LLM call in a thread to avoid blocking the event loop
         loop = asyncio.get_running_loop()
         history = CONVERSATIONS.tail(conv_id)
+        
+        # Log token count for monitoring
+        token_count = CONVERSATIONS.get_token_count(conv_id)
+        log.info("conversation token count", extra={
+            "channel_id": conv_id,
+            "token_count": token_count,
+            "message_count": len(history)
+        })
+        
         try:
             async with message.channel.typing():
                 # Show a progress note if it takes too long
