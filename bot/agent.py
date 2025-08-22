@@ -11,12 +11,15 @@ from .agent_prompt import AGENT_SYSTEM_PROMPT
 from .tools.registry import build_openai_tools_and_registry
 from .tools.tool_impl import build_preferences_context  # reuse the same formatter
 from config.loader import load_runtime_config
-from config.loader import load_runtime_config
+from config.loader import resolve_llm_provider_and_model
 
 
 class Agent:
     def __init__(self, *, api_key: str, project_root: Path, provider: str = "openai", progress_callback: Optional[Callable[[str, str], None]] = None):
-        self.llm = LLMClient(api_key, provider=provider)
+        # Override provider by config priority if available
+        from config.loader import resolve_llm_provider_and_model, load_settings
+        prov, _ = resolve_llm_provider_and_model(project_root, "chat", load_settings(project_root))
+        self.llm = LLMClient(api_key, provider=prov)
         self.openai_tools, self.tool_registry = build_openai_tools_and_registry(project_root, self.llm)
         self.project_root = project_root
         self.log = logging.getLogger("moviebot.agent")
@@ -451,23 +454,16 @@ class Agent:
         return synthesized  # type: ignore[return-value]
 
     def converse(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
-        # Choose appropriate model based on provider
-        if hasattr(self.llm, 'provider') and self.llm.provider == "openrouter":
-            model = "z-ai/glm-4.5-air:free"  # Use the free GLM 4.5 Air model for conversations
-        else:
-            model = "gpt-5-mini"  # Fallback to OpenAI model
+        # Choose model from config
+        _, model = resolve_llm_provider_and_model(self.project_root, "smart")
         # Use async version to avoid threading overhead
         import asyncio
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # If we're already in an async context, create a new one
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    return loop.run_until_complete(self._run_tools_loop(messages, model=model))
-                finally:
-                    loop.close()
+                # If already in async context, submit to the running loop
+                fut = asyncio.run_coroutine_threadsafe(self._run_tools_loop(messages, model=model), loop)
+                return fut.result()
             else:
                 return loop.run_until_complete(self._run_tools_loop(messages, model=model))
         except RuntimeError:
@@ -480,31 +476,21 @@ class Agent:
 
     async def aconverse(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         """Async version of converse for non-blocking operations."""
-        # Choose appropriate model based on provider
-        if hasattr(self.llm, 'provider') and self.llm.provider == "openrouter":
-            model = "z-ai/glm-4.5-air:free"  # Use the free GLM 4.5 Air model for conversations
-        else:
-            model = "gpt-5-mini"  # Fallback to OpenAI model
+        # Choose model from config
+        _, model = resolve_llm_provider_and_model(self.project_root, "smart")
         return await self._arun_tools_loop(messages, model=model)
 
     def recommend(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
-        # Choose appropriate model based on provider
-        if hasattr(self.llm, 'provider') and self.llm.provider == "openrouter":
-            model = "z-ai/glm-4.5-air:free"  # Use the free GLM 4.5 Air model for recommendations
-        else:
-            model = "gpt-5"  # Fallback to OpenAI model
+        # Choose model from config
+        _, model = resolve_llm_provider_and_model(self.project_root, "smart")
         # Use async version to avoid threading overhead
         import asyncio
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # If we're already in an async context, create a new one
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    return loop.run_until_complete(self._run_tools_loop(messages, model=model))
-                finally:
-                    loop.close()
+                # If already in async context, submit to the running loop
+                fut = asyncio.run_coroutine_threadsafe(self._run_tools_loop(messages, model=model), loop)
+                return fut.result()
             else:
                 return loop.run_until_complete(self._run_tools_loop(messages, model=model))
         except RuntimeError:
@@ -517,11 +503,8 @@ class Agent:
 
     async def arecommend(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         """Async version of recommend for non-blocking operations."""
-        # Choose appropriate model based on provider
-        if hasattr(self.llm, 'provider') and self.llm.provider == "openrouter":
-            model = "z-ai/glm-4.5-air:free"  # Use the free GLM 4.5 Air model for recommendations
-        else:
-            model = "gpt-5"  # Fallback to OpenAI model
+        # Choose model from config
+        _, model = resolve_llm_provider_and_model(self.project_root, "smart")
         return await self._arun_tools_loop(messages, model=model)
 
 

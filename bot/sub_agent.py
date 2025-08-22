@@ -18,26 +18,13 @@ class SubAgent:
     """
     
     def __init__(self, *, api_key: str, project_root: Path, provider: str = "openai"):
-        self.llm = LLMClient(api_key, provider=provider)
+        # Resolve provider for worker role (lightweight tasks)
+        from config.loader import resolve_llm_provider_and_model, load_settings
+        prov, _ = resolve_llm_provider_and_model(project_root, "worker", load_settings(project_root))
+        self.llm = LLMClient(api_key, provider=prov)
         self.openai_tools, self.tool_registry = build_openai_tools_and_registry(project_root, self.llm)
         self.project_root = project_root
         self.log = logging.getLogger("moviebot.sub_agent")
-        
-        # Use the same provider selection logic as the main agent
-        from config.loader import load_settings
-        settings = load_settings(project_root)
-        
-        # Choose provider: OpenRouter if available, otherwise OpenAI (same logic as main agent)
-        if settings.openai_api_key:
-            self.api_key = settings.openai_api_key
-            self.provider = "openai"
-        else:
-            self.api_key = settings.openrouter_api_key or ""
-            self.provider = "openrouter"
-        
-        # Recreate LLM client with correct provider
-        self.llm = LLMClient(self.api_key, provider=self.provider)
-        self.openai_tools, self.tool_registry = build_openai_tools_and_registry(project_root, self.llm)
 
     def _chat_once(self, messages: List[Dict[str, Any]], model: str) -> Any:
         """Single chat interaction with the LLM."""
@@ -139,10 +126,8 @@ Remember: Search for ALL episodes, not just some of them!
         ]
 
         # Use a lightweight model for efficiency
-        if hasattr(self.llm, 'provider') and self.llm.provider == "openrouter":
-            model = "z-ai/glm-4.5-air:free"
-        else:
-            model = "gpt-5-nano"
+        from config.loader import resolve_llm_provider_and_model
+        _, model = resolve_llm_provider_and_model(self.project_root, "worker")
 
         # Single iteration for focused task
         response = self._chat_once(messages, model)
@@ -278,10 +263,8 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
             {"role": "user", "content": f"Update series {series_id} to use the best available quality from {', '.join(fallback_qualities)} since {target_quality} isn't available."}
         ]
 
-        if hasattr(self.llm, 'provider') and self.llm.provider == "openrouter":
-            model = "z-ai/glm-4.5-air:free"
-        else:
-            model = "gpt-5-nano"
+        from config.loader import resolve_llm_provider_and_model
+        _, model = resolve_llm_provider_and_model(self.project_root, "worker")
 
         response = self._chat_once(messages, model)
         

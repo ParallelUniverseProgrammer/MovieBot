@@ -1534,11 +1534,10 @@ def make_query_household_preferences(project_root: Path, llm_client) -> Callable
             flat = _flatten(data)
             compact = "; ".join(f"{k}: {v}" for k, v in flat[:100])
         
-        # Choose model based on provider
-        if hasattr(llm_client, 'provider') and llm_client.provider == "openrouter":
-            model = "z-ai/glm-4.5-air:free"  # Use the free GLM 4.5 Air model
-        else:
-            model = "gpt-5-nano"  # Fallback to OpenAI model
+        # Choose model from config
+        from config.loader import resolve_llm_provider_and_model
+        project_root = Path(__file__).resolve().parents[2]
+        _, model = resolve_llm_provider_and_model(project_root, "worker")
         
         # Prepare the prompt for the selected model
         system_message = {

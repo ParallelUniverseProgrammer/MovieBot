@@ -55,6 +55,48 @@ def load_runtime_config(project_root: Path) -> dict:
         return yaml.safe_load(f) or {}
 
 
+def resolve_llm_provider_and_model(project_root: Path, role: str, settings: Settings | None = None) -> tuple[str, str]:
+    """Return (provider, model) for a given role: chat|smart|worker.
+
+    Uses config.llm.providers.priority order and picks first provider that has
+    required API key in Settings and defines a model for the role.
+    """
+    rc = load_runtime_config(project_root)
+    providers_cfg = (rc.get("llm", {}) or {}).get("providers", {}) or {}
+    priority = providers_cfg.get("priority") or []
+
+    if settings is None:
+        settings = load_settings(project_root)
+
+    def has_api_key(p: str) -> bool:
+        if p == "openai":
+            return bool(settings.openai_api_key)
+        if p == "openrouter":
+            return bool(settings.openrouter_api_key)
+        return False
+
+    for p in priority:
+        models = providers_cfg.get(p, {}) or {}
+        model = models.get(role)
+        if model and has_api_key(p):
+            return p, str(model)
+
+    # Fallbacks if priority missing or no key available
+    # Prefer OpenAI if key exists
+    if settings.openai_api_key:
+        model = ((providers_cfg.get("openai", {}) or {}).get(role)) or (
+            "gpt-5-mini" if role == "chat" else ("gpt-5" if role == "smart" else "gpt-5-nano")
+        )
+        return "openai", str(model)
+    if settings.openrouter_api_key:
+        model = ((providers_cfg.get("openrouter", {}) or {}).get(role)) or "z-ai/glm-4.5-air:free"
+        return "openrouter", str(model)
+
+    # Last resort defaults
+    default = "gpt-5-mini" if role == "chat" else ("gpt-5" if role == "smart" else "gpt-5-nano")
+    return "openai", default
+
+
 def is_config_complete(settings: Settings, runtime_config: dict) -> bool:
     required_env = [
         settings.discord_token,

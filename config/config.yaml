@@ -8,6 +8,16 @@ sonarr:
   rootFolderPath: "D:\\TV"
 llm:
   maxIters: 8
+  providers:
+    priority: [openai, openrouter]
+    openai:
+      chat: gpt-5-mini
+      smart: gpt-5
+      worker: gpt-5-nano
+    openrouter:
+      chat: z-ai/glm-4.5-air:free
+      smart: z-ai/glm-4.5-air:free
+      worker: z-ai/glm-4.5-air:free
 tools:
   timeoutMs: 6000  # Reduced from 8000ms for faster failure detection
   parallelism: 6   # Increased from 4 for better concurrency
