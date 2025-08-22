@@ -22,7 +22,11 @@ def register(client: discord.Client) -> None:
         profile = profile_id or config.get("radarr", {}).get("qualityProfileId")
         folder = root or config.get("radarr", {}).get("rootFolderPath")
         if not profile or not folder:
-            await interaction.followup.send("Set default Radarr profile/root in config or pass them as arguments.", ephemeral=True)
+            await interaction.followup.send(
+                f"Radarr configuration missing. Profile: {profile}, Folder: {folder}. "
+                "Set defaults in config/config.yaml or pass them as arguments.", 
+                ephemeral=True
+            )
             return
         try:
             radarr = RadarrClient(settings.radarr_base_url, settings.radarr_api_key or "")
@@ -41,7 +45,11 @@ def register(client: discord.Client) -> None:
         profile = profile_id or config.get("sonarr", {}).get("qualityProfileId")
         folder = root or config.get("sonarr", {}).get("rootFolderPath")
         if not profile or not folder:
-            await interaction.followup.send("Set default Sonarr profile/root in config or pass them as arguments.", ephemeral=True)
+            await interaction.followup.send(
+                f"Sonarr configuration missing. Profile: {profile}, Folder: {folder}. "
+                "Set defaults in config/config.yaml or pass them as arguments.", 
+                ephemeral=True
+            )
             return
         try:
             sonarr = SonarrClient(settings.sonarr_base_url, settings.sonarr_api_key or "")

@@ -80,12 +80,12 @@ def build_client() -> MovieBotClient:
         settings = load_settings(client.project_root)  # type: ignore[attr-defined]
         
         # Choose provider: OpenRouter if available, otherwise OpenAI
-        if settings.openrouter_api_key:
-            api_key = settings.openrouter_api_key
-            provider = "openrouter"
-        else:
-            api_key = settings.openai_api_key or ""
+        if settings.openai_api_key:
+            api_key = settings.openai_api_key
             provider = "openai"
+        else:
+            api_key = settings.openrouter_api_key or ""
+            provider = "openrouter"
         
         agent = Agent(api_key=api_key, project_root=client.project_root, provider=provider)  # type: ignore[arg-type]
         

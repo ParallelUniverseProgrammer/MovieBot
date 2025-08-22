@@ -1,11 +1,11 @@
 household:
   displayName: Household
 radarr:
-  qualityProfileId: null
-  rootFolderPath: null
+  qualityProfileId: 1
+  rootFolderPath: "D:\\Movies"
 sonarr:
-  qualityProfileId: null
-  rootFolderPath: null
+  qualityProfileId: 4
+  rootFolderPath: "D:\\TV"
 llm:
   maxIters: 8
 tools:

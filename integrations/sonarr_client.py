@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -9,7 +9,23 @@ class SonarrClient:
     def __init__(self, base_url: str, api_key: str):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
-        self._client = httpx.AsyncClient(base_url=self.base_url, headers={"X-Api-Key": api_key}, timeout=20.0)
+        
+        if not base_url or not base_url.strip():
+            raise ValueError("base_url cannot be empty")
+        if not api_key or not api_key.strip():
+            raise ValueError("api_key cannot be empty")
+        
+        # Validate URL format
+        if not base_url.startswith(('http://', 'https://')):
+            raise ValueError("base_url must start with http:// or https://")
+        
+        self._client = httpx.AsyncClient(
+            base_url=self.base_url, 
+            headers={"X-Api-Key": api_key}, 
+            timeout=20.0
+        )
+        
+        print(f"🔗 Sonarr client initialized for: {self.base_url}")
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -36,19 +52,31 @@ class SonarrClient:
         r.raise_for_status()
         return r.json()
 
+    async def get_quality_profile_names(self) -> List[Dict[str, Any]]:
+        """Get quality profiles with just id and name for easier selection."""
+        profiles = await self.quality_profiles()
+        return [{"id": p.get("id"), "name": p.get("name")} for p in profiles if p.get("id") and p.get("name")]
+
     async def root_folders(self) -> List[Dict[str, Any]]:
         r = await self._client.get("/api/v3/rootfolder")
         r.raise_for_status()
         return r.json()
 
+    async def get_root_folder_paths(self) -> List[str]:
+        """Get just the root folder paths for easier selection."""
+        folders = await self.root_folders()
+        return [f.get("path") for f in folders if f.get("path")]
+
     # Series Management
-    async def get_series(self, series_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def get_series(self, series_id: Optional[int] = None) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
         if series_id:
             r = await self._client.get(f"/api/v3/series/{series_id}")
+            r.raise_for_status()
+            return r.json()
         else:
             r = await self._client.get("/api/v3/series")
-        r.raise_for_status()
-        return r.json()
+            r.raise_for_status()
+            return r.json()
 
     async def lookup(self, term: str) -> List[Dict[str, Any]]:
         r = await self._client.get("/api/v3/series/lookup", params={"term": term})
@@ -64,18 +92,138 @@ class SonarrClient:
         monitored: bool = True,
         search_for_missing: bool = True,
         season_folder: bool = True,
+        # Enhanced parameters for better control
+        seasons_to_monitor: Optional[List[int]] = None,
+        episodes_to_monitor: Optional[List[int]] = None,
+        monitor_new_episodes: bool = True,
     ) -> Dict[str, Any]:
+        # Validate required parameters
+        await self._validate_add_series_params(
+            tvdb_id=tvdb_id,
+            quality_profile_id=quality_profile_id,
+            root_folder_path=root_folder_path
+        )
+        
+        # Build the payload with all required fields for Sonarr v3 API
         payload = {
             "tvdbId": tvdb_id,
             "qualityProfileId": quality_profile_id,
             "rootFolderPath": root_folder_path,
             "monitored": monitored,
             "seasonFolder": season_folder,
-            "addOptions": {"searchForMissingEpisodes": search_for_missing},
+            "addOptions": {
+                "searchForMissingEpisodes": search_for_missing,
+                "ignoreEpisodesWithFiles": False,
+                "ignoreEpisodesWithoutFiles": False,
+                "addAndSearchForMissing": search_for_missing
+            },
+            "monitorNewEpisodes": monitor_new_episodes,
+            # Additional required fields that Sonarr expects
+            "useAlternateTitlesForSearch": False,
+            "addOnly": False,
+            "seasons": [],  # Will be populated by Sonarr automatically
+            "episodes": [],  # Will be populated by Sonarr automatically
         }
-        r = await self._client.post("/api/v3/series", json=payload)
-        r.raise_for_status()
-        return r.json()
+        
+        try:
+            # If specific seasons/episodes are specified, we'll need to update after creation
+            r = await self._client.post("/api/v3/series", json=payload)
+            r.raise_for_status()
+            series_data = r.json()
+            
+            # Apply season/episode monitoring if specified
+            if seasons_to_monitor is not None or episodes_to_monitor is not None:
+                series_id = series_data.get("id")
+                if series_id:
+                    await self._apply_monitoring_rules(series_id, seasons_to_monitor, episodes_to_monitor)
+                    # Refresh series data
+                    series_data = await self.get_series(series_id)
+            
+            return series_data
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 400:
+                # Get detailed error information from Sonarr
+                try:
+                    error_detail = e.response.json()
+                    error_msg = f"Sonarr API error (400): {error_detail.get('message', 'Unknown error')}"
+                    if 'validationErrors' in error_detail:
+                        validation_errors = error_detail['validationErrors']
+                        error_msg += f" Validation errors: {validation_errors}"
+                except Exception:
+                    error_msg = f"Sonarr API error (400): {e.response.text}"
+                
+                raise ValueError(error_msg) from e
+            else:
+                raise
+
+    async def _validate_add_series_params(self, tvdb_id: int, quality_profile_id: int, root_folder_path: str) -> None:
+        """Validate parameters before attempting to add a series."""
+        if not tvdb_id or tvdb_id <= 0:
+            raise ValueError("tvdb_id must be a positive integer")
+        
+        if not quality_profile_id or quality_profile_id <= 0:
+            raise ValueError("quality_profile_id must be a positive integer")
+        
+        if not root_folder_path or not root_folder_path.strip():
+            raise ValueError("root_folder_path cannot be empty")
+        
+        # Verify the quality profile exists
+        try:
+            quality_profiles = await self.quality_profiles()
+            profile_ids = [p.get("id") for p in quality_profiles if p.get("id")]
+            if quality_profile_id not in profile_ids:
+                raise ValueError(f"Quality profile ID {quality_profile_id} not found. Available IDs: {profile_ids}")
+        except Exception as e:
+            raise ValueError(f"Failed to validate quality profile: {e}")
+        
+        # Verify the root folder exists
+        try:
+            root_folders = await self.root_folders()
+            folder_paths = [f.get("path") for f in root_folders if f.get("path")]
+            if root_folder_path not in folder_paths:
+                raise ValueError(f"Root folder path '{root_folder_path}' not found. Available paths: {folder_paths}")
+        except Exception as e:
+            raise ValueError(f"Failed to validate root folder: {e}")
+        
+        # Verify the TVDB ID is valid by doing a lookup
+        try:
+            lookup_results = await self.lookup(str(tvdb_id))
+            if not lookup_results:
+                raise ValueError(f"TVDB ID {tvdb_id} not found in Sonarr lookup")
+        except Exception as e:
+            raise ValueError(f"Failed to validate TVDB ID: {e}")
+
+    async def _apply_monitoring_rules(self, series_id: int, seasons_to_monitor: Optional[List[int]], episodes_to_monitor: Optional[List[int]]) -> None:
+        """Apply season and episode monitoring rules after series creation."""
+        if seasons_to_monitor is not None:
+            # First, get all seasons
+            seasons = await self.get_seasons(series_id)
+            for season in seasons:
+                season_number = season.get("seasonNumber")
+                if season_number is not None:
+                    should_monitor = season_number in seasons_to_monitor
+                    await self.monitor_season(series_id, season_number, should_monitor)
+        
+        if episodes_to_monitor is not None:
+            # Get episodes and apply monitoring
+            episodes = await self.get_episodes(series_id)
+            episode_ids_to_monitor = []
+            episode_ids_to_unmonitor = []
+            
+            for episode in episodes:
+                episode_id = episode.get("id")
+                if episode_id is not None:
+                    if episode_id in episodes_to_monitor:
+                        episode_ids_to_monitor.append(episode_id)
+                    else:
+                        episode_ids_to_unmonitor.append(episode_id)
+            
+            # Apply monitoring in batches
+            if episode_ids_to_monitor:
+                await self.monitor_episodes(episode_ids_to_monitor, True)
+            if episode_ids_to_unmonitor:
+                await self.monitor_episodes(episode_ids_to_unmonitor, False)
 
     async def update_series(self, series_id: int, **kwargs) -> Dict[str, Any]:
         r = await self._client.put(f"/api/v3/series/{series_id}", json=kwargs)
@@ -113,6 +261,31 @@ class SonarrClient:
             episode["monitored"] = monitored
         return await self.update_episodes(episodes)
 
+    # Enhanced Episode Control
+    async def monitor_episodes_by_season(self, series_id: int, season_number: int, monitored: bool) -> List[Dict[str, Any]]:
+        """Monitor all episodes in a specific season."""
+        episodes = await self.get_episodes(series_id)
+        season_episode_ids = [
+            episode["id"] for episode in episodes 
+            if episode.get("seasonNumber") == season_number
+        ]
+        return await self.monitor_episodes(season_episode_ids, monitored)
+
+    async def monitor_episodes_by_air_date(self, series_id: int, start_date: str, end_date: str, monitored: bool) -> List[Dict[str, Any]]:
+        """Monitor episodes within a date range."""
+        episodes = await self.get_episodes(series_id)
+        date_filtered_ids = [
+            episode["id"] for episode in episodes 
+            if episode.get("airDateUtc") and start_date <= episode["airDateUtc"] <= end_date
+        ]
+        return await self.monitor_episodes(date_filtered_ids, monitored)
+
+    async def get_episode_file_info(self, episode_id: int) -> Dict[str, Any]:
+        """Get file information for a specific episode."""
+        r = await self._client.get(f"/api/v3/episodefile/{episode_id}")
+        r.raise_for_status()
+        return r.json()
+
     # Season Management
     async def get_seasons(self, series_id: int) -> List[Dict[str, Any]]:
         r = await self._client.get(f"/api/v3/season/{series_id}")
@@ -128,7 +301,13 @@ class SonarrClient:
         r.raise_for_status()
         return r.json()
 
-    # Search & Download
+    async def get_season_details(self, series_id: int, season_number: int) -> Dict[str, Any]:
+        """Get detailed information about a specific season."""
+        r = await self._client.get(f"/api/v3/season/{series_id}/{season_number}")
+        r.raise_for_status()
+        return r.json()
+
+    # Enhanced Search & Download
     async def search_series(self, series_id: int) -> Dict[str, Any]:
         r = await self._client.post(f"/api/v3/command", json={
             "name": "SeriesSearch",
@@ -144,6 +323,26 @@ class SonarrClient:
         })
         r.raise_for_status()
         return r.json()
+
+    async def search_episodes(self, episode_ids: List[int]) -> Dict[str, Any]:
+        """Search for multiple episodes at once."""
+        r = await self._client.post(f"/api/v3/command", json={
+            "name": "EpisodeSearch",
+            "episodeIds": episode_ids
+        })
+        r.raise_for_status()
+        return r.json()
+
+    async def search_season(self, series_id: int, season_number: int) -> Dict[str, Any]:
+        """Search for all episodes in a specific season."""
+        episodes = await self.get_episodes(series_id)
+        season_episode_ids = [
+            episode["id"] for episode in episodes 
+            if episode.get("seasonNumber") == season_number
+        ]
+        if season_episode_ids:
+            return await self.search_episodes(season_episode_ids)
+        return {"ok": False, "error": "No episodes found for season"}
 
     async def search_missing(self) -> Dict[str, Any]:
         r = await self._client.post(f"/api/v3/command", json={
@@ -250,5 +449,56 @@ class SonarrClient:
         r = await self._client.get("/api/v3/wanted/cutoff", params=params)
         r.raise_for_status()
         return r.json()
+
+    # Enhanced Context Management Methods
+    async def get_series_summary(self, series_id: int) -> Dict[str, Any]:
+        """Get a concise summary of series status for efficient context usage."""
+        series = await self.get_series(series_id)
+        if isinstance(series, list):
+            series = next((s for s in series if s.get("id") == series_id), {})
+        
+        # Get basic episode counts
+        episodes = await self.get_episodes(series_id)
+        monitored_episodes = sum(1 for ep in episodes if ep.get("monitored", False))
+        total_episodes = len(episodes)
+        
+        return {
+            "id": series.get("id"),
+            "title": series.get("title"),
+            "status": series.get("status"),
+            "monitored": series.get("monitored"),
+            "total_episodes": total_episodes,
+            "monitored_episodes": monitored_episodes,
+            "path": series.get("path"),
+            "quality_profile_id": series.get("qualityProfileId"),
+            "root_folder_path": series.get("rootFolderPath"),
+        }
+
+    async def get_season_summary(self, series_id: int, season_number: int) -> Dict[str, Any]:
+        """Get a concise summary of season status for efficient context usage."""
+        season = await self.get_season_details(series_id, season_number)
+        episodes = await self.get_episodes(series_id)
+        season_episodes = [ep for ep in episodes if ep.get("seasonNumber") == season_number]
+        
+        monitored_count = sum(1 for ep in season_episodes if ep.get("monitored", False))
+        total_count = len(season_episodes)
+        
+        return {
+            "series_id": series_id,
+            "season_number": season_number,
+            "monitored": season.get("monitored"),
+            "total_episodes": total_count,
+            "monitored_episodes": monitored_count,
+            "episode_file_count": season.get("episodeFileCount", 0),
+            "size_on_disk": season.get("sizeOnDisk", 0),
+        }
+
+    async def test_connection(self) -> bool:
+        """Test if the Sonarr connection is working."""
+        try:
+            await self.system_status()
+            return True
+        except Exception:
+            return False
 
 

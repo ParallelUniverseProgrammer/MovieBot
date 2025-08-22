@@ -81,6 +81,17 @@ from .tool_impl import (
     make_sonarr_disk_space,
     make_sonarr_quality_profiles,
     make_sonarr_root_folders,
+    # Enhanced Sonarr Tools
+    make_sonarr_monitor_season,
+    make_sonarr_monitor_episodes_by_season,
+    make_sonarr_search_season,
+    make_sonarr_search_episodes,
+    make_sonarr_get_series_summary,
+    make_sonarr_get_season_summary,
+    make_sonarr_get_season_details,
+    make_sonarr_get_episode_file_info,
+    make_sonarr_episode_fallback_search,
+    make_sonarr_quality_fallback,
     make_read_household_preferences,
     make_search_household_preferences,
     make_update_household_preferences,
@@ -403,6 +414,10 @@ def _define_openai_tools() -> List[Dict[str, Any]]:
             "root_folder_path": {"type": ["string", "null"]},
             "monitored": {"type": ["boolean", "null"]},
             "search_for_missing": {"type": ["boolean", "null"]},
+            "season_folder": {"type": ["boolean", "null"], "description": "Whether to create season folders"},
+            "seasons_to_monitor": {"type": ["array", "null"], "items": {"type": "integer"}, "description": "Specific seasons to monitor (e.g., [1, 2, 3])"},
+            "episodes_to_monitor": {"type": ["array", "null"], "items": {"type": "integer"}, "description": "Specific episode IDs to monitor"},
+            "monitor_new_episodes": {"type": ["boolean", "null"], "description": "Whether to monitor new episodes as they air"}
         }),
         fn("sonarr_get_series", "Get all series or a specific series from Sonarr.", {
             "series_id": {"type": ["integer", "null"], "description": "Optional series ID to get specific series"}
@@ -444,6 +459,50 @@ def _define_openai_tools() -> List[Dict[str, Any]]:
         fn("sonarr_disk_space", "Get disk space information from Sonarr.", {}),
         fn("sonarr_quality_profiles", "Get quality profiles from Sonarr.", {}),
         fn("sonarr_root_folders", "Get root folders from Sonarr.", {}),
+        
+        # Enhanced Sonarr Tools
+        fn("sonarr_monitor_season", "Monitor or unmonitor an entire season in Sonarr.", {
+            "series_id": {"type": "integer", "description": "Series ID"},
+            "season_number": {"type": "integer", "description": "Season number to monitor/unmonitor"},
+            "monitored": {"type": "boolean", "description": "Whether the season should be monitored"}
+        }),
+        fn("sonarr_monitor_episodes_by_season", "Monitor or unmonitor all episodes in a specific season.", {
+            "series_id": {"type": "integer", "description": "Series ID"},
+            "season_number": {"type": "integer", "description": "Season number"},
+            "monitored": {"type": "boolean", "description": "Whether episodes should be monitored"}
+        }),
+        fn("sonarr_search_season", "Search for all episodes in a specific season.", {
+            "series_id": {"type": "integer", "description": "Series ID"},
+            "season_number": {"type": "integer", "description": "Season number to search"}
+        }),
+        fn("sonarr_search_episodes", "Search for multiple specific episodes by ID.", {
+            "episode_ids": {"type": "array", "items": {"type": "integer"}, "description": "List of episode IDs to search for"}
+        }),
+        fn("sonarr_get_series_summary", "Get a concise summary of series status for efficient context usage.", {
+            "series_id": {"type": "integer", "description": "Series ID"}
+        }),
+        fn("sonarr_get_season_summary", "Get a concise summary of season status for efficient context usage.", {
+            "series_id": {"type": "integer", "description": "Series ID"},
+            "season_number": {"type": "integer", "description": "Season number"}
+        }),
+        fn("sonarr_get_season_details", "Get detailed information about a specific season.", {
+            "series_id": {"type": "integer", "description": "Series ID"},
+            "season_number": {"type": "integer", "description": "Season number"}
+        }),
+        fn("sonarr_get_episode_file_info", "Get file information for a specific episode.", {
+            "episode_id": {"type": "integer", "description": "Episode ID"}
+        }),
+        fn("sonarr_episode_fallback_search", "Handle episode-level search when season packs fail using sub-agent.", {
+            "series_id": {"type": "integer", "description": "Series ID"},
+            "season_number": {"type": "integer", "description": "Season number"},
+            "series_title": {"type": "string", "description": "Series title for context"},
+            "target_episodes": {"type": "array", "items": {"type": "integer"}, "description": "List of episode numbers to search for"}
+        }),
+        fn("sonarr_quality_fallback", "Handle quality fallback when preferred quality isn't available using sub-agent.", {
+            "series_id": {"type": "integer", "description": "Series ID"},
+            "target_quality": {"type": "string", "description": "Preferred quality profile"},
+            "fallback_qualities": {"type": "array", "items": {"type": "string"}, "description": "List of fallback quality profiles to try"}
+        }),
         
         fn("read_household_preferences", "Read the household preferences (optionally by keys or JSON path).", {
             "keys": {"type": ["array", "null"], "items": {"type": "string"}},
@@ -550,6 +609,18 @@ def build_openai_tools_and_registry(project_root: Path, llm_client=None) -> Tupl
     tools.register("sonarr_disk_space", make_sonarr_disk_space(project_root))
     tools.register("sonarr_quality_profiles", make_sonarr_quality_profiles(project_root))
     tools.register("sonarr_root_folders", make_sonarr_root_folders(project_root))
+    
+    # Enhanced Sonarr Tools
+    tools.register("sonarr_monitor_season", make_sonarr_monitor_season(project_root))
+    tools.register("sonarr_monitor_episodes_by_season", make_sonarr_monitor_episodes_by_season(project_root))
+    tools.register("sonarr_search_season", make_sonarr_search_season(project_root))
+    tools.register("sonarr_search_episodes", make_sonarr_search_episodes(project_root))
+    tools.register("sonarr_get_series_summary", make_sonarr_get_series_summary(project_root))
+    tools.register("sonarr_get_season_summary", make_sonarr_get_season_summary(project_root))
+    tools.register("sonarr_get_season_details", make_sonarr_get_season_details(project_root))
+    tools.register("sonarr_get_episode_file_info", make_sonarr_get_episode_file_info(project_root))
+    tools.register("sonarr_episode_fallback_search", make_sonarr_episode_fallback_search(project_root))
+    tools.register("sonarr_quality_fallback", make_sonarr_quality_fallback(project_root))
     
     tools.register("read_household_preferences", make_read_household_preferences(project_root))
     tools.register("search_household_preferences", make_search_household_preferences(project_root))

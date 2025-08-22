@@ -616,12 +616,32 @@ def make_sonarr_add_series(project_root: Path) -> Callable[[dict], Awaitable[dic
         settings = load_settings(project_root)
         config = load_runtime_config(project_root)
         sonarr = SonarrClient(settings.sonarr_base_url, settings.sonarr_api_key or "")
+        
+        # Enhanced parameters for better control
+        seasons_to_monitor = args.get("seasons_to_monitor")
+        episodes_to_monitor = args.get("episodes_to_monitor")
+        monitor_new_episodes = args.get("monitor_new_episodes", True)
+        
+        # Get configuration values with validation
+        quality_profile_id = args.get("quality_profile_id") or config.get("sonarr", {}).get("qualityProfileId")
+        root_folder_path = args.get("root_folder_path") or config.get("sonarr", {}).get("rootFolderPath")
+        
+        if not quality_profile_id:
+            raise ValueError("Sonarr quality profile ID not configured. Set in config/config.yaml or pass quality_profile_id")
+        if not root_folder_path:
+            raise ValueError("Sonarr root folder path not configured. Set in config/config.yaml or pass root_folder_path")
+        
         data = await sonarr.add_series(
             tvdb_id=int(args["tvdb_id"]),
-            quality_profile_id=int(args.get("quality_profile_id") or config.get("sonarr", {}).get("qualityProfileId")),
-            root_folder_path=str(args.get("root_folder_path") or config.get("sonarr", {}).get("rootFolderPath")),
+            quality_profile_id=int(quality_profile_id),
+            root_folder_path=str(root_folder_path),
             monitored=bool(args.get("monitored", True)),
             search_for_missing=bool(args.get("search_for_missing", True)),
+            season_folder=bool(args.get("season_folder", True)),
+            # Enhanced parameters
+            seasons_to_monitor=seasons_to_monitor,
+            episodes_to_monitor=episodes_to_monitor,
+            monitor_new_episodes=monitor_new_episodes,
         )
         await sonarr.close()
         return data
@@ -807,6 +827,175 @@ def make_sonarr_root_folders(project_root: Path) -> Callable[[dict], Awaitable[d
         data = await sonarr.root_folders()
         await sonarr.close()
         return {"root_folders": data}
+
+    return impl
+
+
+# Enhanced Sonarr Tools
+def make_sonarr_monitor_season(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    async def impl(args: dict) -> dict:
+        series_id = int(args["series_id"])
+        season_number = int(args["season_number"])
+        monitored = bool(args["monitored"])
+        settings = load_settings(project_root)
+        sonarr = SonarrClient(settings.sonarr_base_url, settings.sonarr_api_key or "")
+        data = await sonarr.monitor_season(series_id, season_number, monitored)
+        await sonarr.close()
+        return {"season_monitoring_updated": data}
+
+    return impl
+
+
+def make_sonarr_monitor_episodes_by_season(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    async def impl(args: dict) -> dict:
+        series_id = int(args["series_id"])
+        season_number = int(args["season_number"])
+        monitored = bool(args["monitored"])
+        settings = load_settings(project_root)
+        sonarr = SonarrClient(settings.sonarr_base_url, settings.sonarr_api_key or "")
+        data = await sonarr.monitor_episodes_by_season(series_id, season_number, monitored)
+        await sonarr.close()
+        return {"episodes_monitoring_updated": data}
+
+    return impl
+
+
+def make_sonarr_search_season(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    async def impl(args: dict) -> dict:
+        series_id = int(args["series_id"])
+        season_number = int(args["season_number"])
+        settings = load_settings(project_root)
+        sonarr = SonarrClient(settings.sonarr_base_url, settings.sonarr_api_key or "")
+        data = await sonarr.search_season(series_id, season_number)
+        await sonarr.close()
+        return {"season_search_command": data}
+
+    return impl
+
+
+def make_sonarr_search_episodes(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    async def impl(args: dict) -> dict:
+        episode_ids = [int(id) for id in args["episode_ids"]]
+        settings = load_settings(project_root)
+        sonarr = SonarrClient(settings.sonarr_base_url, settings.sonarr_api_key or "")
+        data = await sonarr.search_episodes(episode_ids)
+        await sonarr.close()
+        return {"episodes_search_command": data}
+
+    return impl
+
+
+def make_sonarr_get_series_summary(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    async def impl(args: dict) -> dict:
+        series_id = int(args["series_id"])
+        settings = load_settings(project_root)
+        sonarr = SonarrClient(settings.sonarr_base_url, settings.sonarr_api_key or "")
+        data = await sonarr.get_series_summary(series_id)
+        await sonarr.close()
+        return {"series_summary": data}
+
+    return impl
+
+
+def make_sonarr_get_season_summary(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    async def impl(args: dict) -> dict:
+        series_id = int(args["series_id"])
+        season_number = int(args["season_number"])
+        settings = load_settings(project_root)
+        sonarr = SonarrClient(settings.sonarr_base_url, settings.sonarr_api_key or "")
+        data = await sonarr.get_season_summary(series_id, season_number)
+        await sonarr.close()
+        return {"season_summary": data}
+
+    return impl
+
+
+def make_sonarr_get_season_details(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    async def impl(args: dict) -> dict:
+        series_id = int(args["series_id"])
+        season_number = int(args["season_number"])
+        settings = load_settings(project_root)
+        sonarr = SonarrClient(settings.sonarr_base_url, settings.sonarr_api_key or "")
+        data = await sonarr.get_season_details(series_id, season_number)
+        await sonarr.close()
+        return {"season_details": data}
+
+    return impl
+
+
+def make_sonarr_get_episode_file_info(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    async def impl(args: dict) -> dict:
+        episode_id = int(args["episode_id"])
+        settings = load_settings(project_root)
+        sonarr = SonarrClient(settings.sonarr_base_url, settings.sonarr_api_key or "")
+        data = await sonarr.get_episode_file_info(episode_id)
+        await sonarr.close()
+        return {"episode_file_info": data}
+
+    return impl
+
+
+def make_sonarr_episode_fallback_search(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    """Handle episode fallback search when season packs fail using sub-agent."""
+    async def impl(args: dict) -> dict:
+        from bot.sub_agent import SubAgent
+        
+        series_id = int(args["series_id"])
+        season_number = int(args["season_number"])
+        series_title = str(args["series_title"])
+        target_episodes = [int(ep) for ep in args["target_episodes"]]
+        
+        settings = load_settings(project_root)
+        config = load_runtime_config(project_root)
+        
+        # Create sub-agent for focused episode search
+        sub_agent = SubAgent(
+            api_key=settings.openai_api_key or config.get("llm", {}).get("apiKey", ""),
+            project_root=project_root,
+            provider=config.get("llm", {}).get("provider", "openai")
+        )
+        
+        try:
+            result = await sub_agent.handle_episode_fallback_search(
+                series_id, season_number, series_title, target_episodes
+            )
+            return result
+        finally:
+            # Clean up sub-agent resources
+            if hasattr(sub_agent.llm, 'client') and hasattr(sub_agent.llm.client, 'close'):
+                await sub_agent.llm.client.close()
+
+    return impl
+
+
+def make_sonarr_quality_fallback(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    """Handle quality fallback when preferred quality isn't available using sub-agent."""
+    async def impl(args: dict) -> dict:
+        from bot.sub_agent import SubAgent
+        
+        series_id = int(args["series_id"])
+        target_quality = str(args["target_quality"])
+        fallback_qualities = [str(q) for q in args["fallback_qualities"]]
+        
+        settings = load_settings(project_root)
+        config = load_runtime_config(project_root)
+        
+        # Create sub-agent for quality management
+        sub_agent = SubAgent(
+            api_key=settings.openai_api_key or config.get("llm", {}).get("apiKey", ""),
+            project_root=project_root,
+            provider=config.get("llm", {}).get("provider", "openai")
+        )
+        
+        try:
+            result = await sub_agent.handle_quality_fallback(
+                series_id, target_quality, fallback_qualities
+            )
+            return result
+        finally:
+            # Clean up sub-agent resources
+            if hasattr(sub_agent.llm, 'client') and hasattr(sub_agent.llm.client, 'close'):
+                await sub_agent.llm.client.close()
 
     return impl
 

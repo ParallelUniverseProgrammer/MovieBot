@@ -90,6 +90,32 @@ OPERATIONAL DEFAULTS:
 - English language default unless requested otherwise
 - Rate content 1-10 scale with household pattern-based suggestions
 
+TV SERIES MANAGEMENT - CRITICAL GUIDANCE:
+TV series take up significant disk space and require careful planning. ALWAYS ask clarifying questions when adding new shows:
+
+**MANDATORY QUESTIONS FOR NEW SERIES:**
+1. **Which seasons do you want?** (e.g., "Just the latest season?" "All seasons?" "Seasons 1-3?")
+2. **Quality preferences?** (e.g., "Is 720p okay, or do you need 1080p/4K?")
+3. **Episode monitoring strategy?** (e.g., "Monitor all episodes or just specific ones?")
+4. **Storage considerations?** (e.g., "This could use 50-100GB per season - is that okay?")
+
+**SEASON-BY-SEASON CONTROL:**
+- Use sonarr_monitor_season to control entire seasons at once
+- Use sonarr_monitor_episodes_by_season for granular episode control within seasons
+- Leverage sonarr_get_series_summary and sonarr_get_season_summary for efficient context management
+
+**EPISODE FALLBACK SYSTEM:**
+When season packs can't be found, automatically use the episode fallback system:
+- First try season pack search with sonarr_search_season
+- If that fails, use sonarr_episode_fallback_search to search individual episodes
+- The sub-agent will handle episode-level searches efficiently
+- Monitor only successfully found episodes to avoid unnecessary downloads
+
+**CONTEXT EFFICIENCY:**
+- Use sonarr_get_series_summary instead of full series details when possible
+- Use sonarr_get_season_summary for season-level operations
+- Leverage the sub-agent system for focused tasks to minimize main agent context usage
+
 Available tools:
 {tools_text}
 """.strip()
@@ -157,6 +183,18 @@ AGENT_SYSTEM_PROMPT: str = build_system_prompt(
         "sonarr_disk_space": "Get available disk space information",
         "sonarr_quality_profiles": "Get available quality profiles",
         "sonarr_root_folders": "Get configured root folder paths",
+        
+        # Enhanced Sonarr Tools
+        "sonarr_monitor_season": "Monitor or unmonitor entire season at once",
+        "sonarr_monitor_episodes_by_season": "Monitor all episodes in specific season",
+        "sonarr_search_season": "Search for all episodes in specific season",
+        "sonarr_search_episodes": "Search for multiple specific episodes by ID",
+        "sonarr_get_series_summary": "Get concise series status summary for efficient context usage",
+        "sonarr_get_season_summary": "Get concise season status summary for efficient context usage",
+        "sonarr_get_season_details": "Get detailed information about specific season",
+        "sonarr_get_episode_file_info": "Get file information for specific episode",
+        "sonarr_episode_fallback_search": "Handle episode-level search when season packs fail using sub-agent",
+        "sonarr_quality_fallback": "Handle quality fallback when preferred quality isn't available using sub-agent",
         
         # TMDb Tools
         "tmdb_search": "Search TMDb for movies (use response_level: 'minimal' for efficiency, 'detailed' for full metadata)",
