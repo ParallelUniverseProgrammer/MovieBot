@@ -120,9 +120,10 @@ def _define_openai_tools() -> List[Dict[str, Any]]:
         fn("search_plex", "Search Plex library by title with advanced filtering options.", {
             "query": {"type": ["string", "null"], "description": "Search query (optional - if not provided, returns all movies)"},
             "limit": {"type": ["integer", "null"], "description": "Maximum number of results to return (default: 20)"},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]},
             "filters": {
                 "type": ["object", "null"],
-                "description": "Advanced filtering options",
+                "description": "Advanced filtering options (only available with standard/detailed response levels)",
                 "properties": {
                     "year_min": {"type": ["integer", "null"], "description": "Minimum year filter"},
                     "year_max": {"type": ["integer", "null"], "description": "Maximum year filter"},
@@ -146,39 +147,49 @@ def _define_openai_tools() -> List[Dict[str, Any]]:
         fn("get_plex_library_sections", "Get available Plex library sections and their counts.", {}),
         fn("get_plex_recently_added", "Get recently added items from a Plex library section.", {
             "section_type": {"type": ["string", "null"], "description": "Library section type (movie, show, default: movie)"},
-            "limit": {"type": ["integer", "null"], "description": "Maximum number of results (default: 20)"}
+            "limit": {"type": ["integer", "null"], "description": "Maximum number of results (default: 20)"},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("get_plex_on_deck", "Get items that are 'on deck' (next to watch) in Plex.", {
-            "limit": {"type": ["integer", "null"], "description": "Maximum number of results (default: 20)"}
+            "limit": {"type": ["integer", "null"], "description": "Maximum number of results (default: 20)"},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("get_plex_continue_watching", "Get items that can be continued (partially watched) in Plex.", {
-            "limit": {"type": ["integer", "null"], "description": "Maximum number of results (default: 20)"}
+            "limit": {"type": ["integer", "null"], "description": "Maximum number of results (default: 20)"},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("get_plex_unwatched", "Get unwatched items from a Plex library section.", {
             "section_type": {"type": ["string", "null"], "description": "Library section type (movie, show, default: movie)"},
-            "limit": {"type": ["integer", "null"], "description": "Maximum number of results (default: 20)"}
+            "limit": {"type": ["integer", "null"], "description": "Maximum number of results (default: 20)"},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("get_plex_collections", "Get collections from a Plex library section.", {
             "section_type": {"type": ["string", "null"], "description": "Library section type (movie, show, default: movie)"},
-            "limit": {"type": ["integer", "null"], "description": "Maximum number of results (default: 50)"}
+            "limit": {"type": ["integer", "null"], "description": "Maximum number of results (default: 50)"},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("get_plex_playlists", "Get available Plex playlists.", {
-            "limit": {"type": ["integer", "null"], "description": "Maximum number of results (default: 50)"}
+            "limit": {"type": ["integer", "null"], "description": "Maximum number of results (default: 50)"},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("get_plex_similar_items", "Get similar items to a specific Plex item.", {
             "rating_key": {"type": "integer", "description": "Plex item rating key"},
-            "limit": {"type": ["integer", "null"], "description": "Maximum number of results (default: 10)"}
+            "limit": {"type": ["integer", "null"], "description": "Maximum number of results (default: 10)"},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("get_plex_extras", "Get extras (deleted scenes, bonus features) for a Plex item.", {
             "rating_key": {"type": "integer", "description": "Plex item rating key"}
         }),
-        fn("get_plex_playback_status", "Get current playback status across all Plex clients.", {}),
+        fn("get_plex_playback_status", "Get current playback status across all Plex clients.", {
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
+        }),
         fn("get_plex_watch_history", "Get watch history for a specific Plex item.", {
             "rating_key": {"type": "integer", "description": "Plex item rating key"},
             "limit": {"type": ["integer", "null"], "description": "Maximum number of results (default: 20)"}
         }),
         fn("get_plex_item_details", "Get comprehensive details for a specific Plex item.", {
-            "rating_key": {"type": "integer", "description": "Plex item rating key"}
+            "rating_key": {"type": "integer", "description": "Plex item rating key"},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: detailed for full metadata)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         
         fn("tmdb_search", "Search TMDb for movies with optional filtering.", {
@@ -186,12 +197,14 @@ def _define_openai_tools() -> List[Dict[str, Any]]:
             "year": {"type": ["integer", "null"], "description": "Filter by year"},
             "primary_release_year": {"type": ["integer", "null"], "description": "Filter by primary release year"},
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_recommendations", "Get TMDb recommendations for a movie.", {
             "tmdb_id": {"type": "integer", "description": "TMDb movie ID"},
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         
         # Enhanced TMDb Tools for Advanced Discovery
@@ -208,7 +221,8 @@ def _define_openai_tools() -> List[Dict[str, Any]]:
             "with_runtime_lte": {"type": ["integer", "null"], "description": "Maximum runtime in minutes"},
             "with_original_language": {"type": ["string", "null"], "description": "Original language code (e.g., 'en', 'es')"},
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_discover_tv", "Advanced TV series discovery with comprehensive filtering options.", {
             "sort_by": {"type": ["string", "null"], "description": "Sort field (popularity.desc, vote_average.desc, first_air_date.desc, etc.)", "default": "popularity.desc"},
@@ -222,80 +236,97 @@ def _define_openai_tools() -> List[Dict[str, Any]]:
             "with_runtime_lte": {"type": ["integer", "null"], "description": "Maximum runtime in minutes"},
             "with_original_language": {"type": ["string", "null"], "description": "Original language code (e.g., 'en', 'es')"},
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_trending", "Get trending movies, TV shows, or people.", {
             "media_type": {"type": ["string", "null"], "description": "Media type (all, movie, tv, person)", "default": "all"},
             "time_window": {"type": ["string", "null"], "description": "Time window (day, week)", "default": "week"},
-            "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"}
+            "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_popular_movies", "Get popular movies.", {
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_top_rated_movies", "Get top rated movies.", {
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_upcoming_movies", "Get upcoming movie releases.", {
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_now_playing_movies", "Get movies currently in theaters.", {
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_popular_tv", "Get popular TV series.", {
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_top_rated_tv", "Get top rated TV series.", {
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_on_the_air_tv", "Get TV series currently on the air.", {
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_airing_today_tv", "Get TV series airing today.", {
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_movie_details", "Get comprehensive movie details including credits, videos, images.", {
             "movie_id": {"type": "integer", "description": "TMDb movie ID"},
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "append_to_response": {"type": ["string", "null"], "description": "Additional data to include (e.g., 'credits,videos,images')"}
+            "append_to_response": {"type": ["string", "null"], "description": "Additional data to include (e.g., 'credits,videos,images')"},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: detailed for full metadata)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_tv_details", "Get comprehensive TV series details.", {
             "tv_id": {"type": "integer", "description": "TMDb TV series ID"},
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "append_to_response": {"type": ["string", "null"], "description": "Additional data to include (e.g., 'credits,videos,images')"}
+            "append_to_response": {"type": ["string", "null"], "description": "Additional data to include (e.g., 'credits,videos,images')"},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: detailed for full metadata)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_similar_movies", "Get similar movies to a specific movie.", {
             "movie_id": {"type": "integer", "description": "TMDb movie ID"},
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_similar_tv", "Get similar TV series to a specific series.", {
             "tv_id": {"type": "integer", "description": "TMDb TV series ID"},
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_search_tv", "Search for TV series.", {
             "query": {"type": "string", "description": "Search query"},
             "first_air_date_year": {"type": ["integer", "null"], "description": "Filter by first air date year"},
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_search_multi", "Search across movies, TV shows, and people.", {
             "query": {"type": "string", "description": "Search query"},
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_search_person", "Search for people (actors, directors, etc.).", {
             "query": {"type": "string", "description": "Search query"},
             "language": {"type": ["string", "null"], "description": "Response language", "default": "en-US"},
-            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1}
+            "page": {"type": ["integer", "null"], "description": "Page number", "default": 1},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, or detailed (default: compact for efficiency)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("tmdb_genres", "Get available genres for movies or TV.", {
             "media_type": {"type": ["string", "null"], "description": "Media type (movie or tv)", "default": "movie"},

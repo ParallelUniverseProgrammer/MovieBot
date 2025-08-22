@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Tuple
 
 from config.loader import load_settings, load_runtime_config
-from integrations.plex_client import PlexClient
-from integrations.tmdb_client import TMDbClient
+from integrations.plex_client import PlexClient, ResponseLevel
+from integrations.tmdb_client import TMDbClient, TMDbResponseLevel
 from integrations.radarr_client import RadarrClient
 from integrations.sonarr_client import SonarrClient
 
@@ -28,57 +28,41 @@ def make_search_plex(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
         sort_by = filters.get("sort_by", "title")
         sort_order = filters.get("sort_order", "asc")
         limit = args.get("limit", 20)
+        response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
         
         # Get all movies if no query, otherwise search
         if query:
-            results = plex.search_movies(query)
+            results = plex.search_movies(query, response_level)
         else:
             # Get all movies from the library
             movie_library = plex.plex.library.section("Movies")
             results = movie_library.all()
+            results = plex._serialize_items(results, response_level)
         
-        # Apply filters
-        filtered_results = []
-        for movie in results:
-            if _matches_filters(movie, year_min, year_max, genres, actors, directors, 
-                              content_rating, rating_min, rating_max):
-                filtered_results.append(movie)
-        
-        # Sort results
-        filtered_results = _sort_movies(filtered_results, sort_by, sort_order)
+        # Apply filters (only if we have detailed data)
+        if response_level in [ResponseLevel.STANDARD, ResponseLevel.DETAILED]:
+            filtered_results = []
+            for movie in results:
+                if _matches_filters(movie, year_min, year_max, genres, actors, directors, 
+                                  content_rating, rating_min, rating_max):
+                    filtered_results.append(movie)
+            results = filtered_results
+            
+            # Sort results
+            results = _sort_movies(results, sort_by, sort_order)
         
         # Apply limit
-        filtered_results = filtered_results[:limit]
-        
-        # Extract metadata
-        items = []
-        for movie in filtered_results:
-            item = {
-                "title": getattr(movie, "title", None),
-                "year": getattr(movie, "year", None),
-                "ratingKey": getattr(movie, "ratingKey", None),
-                "rating": getattr(movie, "rating", None),
-                "contentRating": getattr(movie, "contentRating", None),
-                "duration": getattr(movie, "duration", None),
-                "genres": [genre.tag for genre in getattr(movie, "genres", [])] if hasattr(movie, "genres") else [],
-                "actors": [actor.tag for actor in getattr(movie, "actors", [])] if hasattr(movie, "actors") else [],
-                "directors": [director.tag for director in getattr(movie, "directors", [])] if hasattr(movie, "directors") else [],
-                "summary": getattr(movie, "summary", None),
-                "tagline": getattr(movie, "tagline", None),
-                "studio": getattr(movie, "studio", None),
-                "addedAt": _serialize_datetime(getattr(movie, "addedAt", None)),
-                "updatedAt": _serialize_datetime(getattr(movie, "updatedAt", None)),
-            }
-            items.append(item)
+        results = results[:limit]
         
         return {
-            "items": items,
-            "total_found": len(filtered_results),
-            "filters_applied": filters,
-            "query": query
+            "items": results,
+            "total_found": len(results),
+            "filters_applied": filters if response_level in [ResponseLevel.STANDARD, ResponseLevel.DETAILED] else None,
+            "query": query,
+            "response_level": response_level.value if response_level else "compact"
         }
 
     return impl
@@ -177,10 +161,11 @@ def make_tmdb_search(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
         primary_release_year = args.get("primary_release_year")
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.search_movie(query, year, primary_release_year, language, page)
+        data = await tmdb.search_movie(query, year, primary_release_year, language, page, response_level)
         await tmdb.close()
         return data
 
@@ -192,10 +177,11 @@ def make_tmdb_recommendations(project_root: Path) -> Callable[[dict], Awaitable[
         tmdb_id = int(args["tmdb_id"])  # raises if missing
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.recommendations(tmdb_id, language, page)
+        data = await tmdb.recommendations(tmdb_id, language, page, response_level)
         await tmdb.close()
         return data
 
@@ -222,6 +208,7 @@ def make_tmdb_discover_movies(project_root: Path) -> Callable[[dict], Awaitable[
         with_original_language = args.get("with_original_language")
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         data = await tmdb.discover_movies(
             sort_by=sort_by,
@@ -236,7 +223,8 @@ def make_tmdb_discover_movies(project_root: Path) -> Callable[[dict], Awaitable[
             with_runtime_lte=with_runtime_lte,
             with_original_language=with_original_language,
             language=language,
-            page=page
+            page=page,
+            response_level=response_level
         )
         await tmdb.close()
         return data
@@ -263,6 +251,7 @@ def make_tmdb_discover_tv(project_root: Path) -> Callable[[dict], Awaitable[dict
         with_original_language = args.get("with_original_language")
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         data = await tmdb.discover_tv(
             sort_by=sort_by,
@@ -276,7 +265,8 @@ def make_tmdb_discover_tv(project_root: Path) -> Callable[[dict], Awaitable[dict
             with_runtime_lte=with_runtime_lte,
             with_original_language=with_original_language,
             language=language,
-            page=page
+            page=page,
+            response_level=response_level
         )
         await tmdb.close()
         return data
@@ -290,10 +280,11 @@ def make_tmdb_trending(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
         media_type = str(args.get("media_type", "all"))  # all, movie, tv, person
         time_window = str(args.get("time_window", "week"))  # day, week
         language = str(args.get("language", "en-US"))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.trending(media_type, time_window, language)
+        data = await tmdb.trending(media_type, time_window, language, response_level)
         await tmdb.close()
         return data
 
@@ -305,10 +296,11 @@ def make_tmdb_popular_movies(project_root: Path) -> Callable[[dict], Awaitable[d
     async def impl(args: dict) -> dict:
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.popular_movies(language, page)
+        data = await tmdb.popular_movies(language, page, response_level)
         await tmdb.close()
         return data
 
@@ -320,10 +312,11 @@ def make_tmdb_top_rated_movies(project_root: Path) -> Callable[[dict], Awaitable
     async def impl(args: dict) -> dict:
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.top_rated_movies(language, page)
+        data = await tmdb.top_rated_movies(language, page, response_level)
         await tmdb.close()
         return data
 
@@ -335,10 +328,11 @@ def make_tmdb_upcoming_movies(project_root: Path) -> Callable[[dict], Awaitable[
     async def impl(args: dict) -> dict:
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.upcoming_movies(language, page)
+        data = await tmdb.upcoming_movies(language, page, response_level)
         await tmdb.close()
         return data
 
@@ -350,10 +344,11 @@ def make_tmdb_now_playing_movies(project_root: Path) -> Callable[[dict], Awaitab
     async def impl(args: dict) -> dict:
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.now_playing_movies(language, page)
+        data = await tmdb.now_playing_movies(language, page, response_level)
         await tmdb.close()
         return data
 
@@ -365,10 +360,11 @@ def make_tmdb_popular_tv(project_root: Path) -> Callable[[dict], Awaitable[dict]
     async def impl(args: dict) -> dict:
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.popular_tv(language, page)
+        data = await tmdb.popular_tv(language, page, response_level)
         await tmdb.close()
         return data
 
@@ -380,10 +376,11 @@ def make_tmdb_top_rated_tv(project_root: Path) -> Callable[[dict], Awaitable[dic
     async def impl(args: dict) -> dict:
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.top_rated_tv(language, page)
+        data = await tmdb.top_rated_tv(language, page, response_level)
         await tmdb.close()
         return data
 
@@ -395,10 +392,11 @@ def make_tmdb_on_the_air_tv(project_root: Path) -> Callable[[dict], Awaitable[di
     async def impl(args: dict) -> dict:
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.on_the_air_tv(language, page)
+        data = await tmdb.on_the_air_tv(language, page, response_level)
         await tmdb.close()
         return data
 
@@ -410,10 +408,11 @@ def make_tmdb_airing_today_tv(project_root: Path) -> Callable[[dict], Awaitable[
     async def impl(args: dict) -> dict:
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.airing_today_tv(language, page)
+        data = await tmdb.airing_today_tv(language, page, response_level)
         await tmdb.close()
         return data
 
@@ -426,10 +425,11 @@ def make_tmdb_movie_details(project_root: Path) -> Callable[[dict], Awaitable[di
         movie_id = int(args["movie_id"])
         language = str(args.get("language", "en-US"))
         append_to_response = args.get("append_to_response")  # e.g., "credits,videos,images"
+        response_level = TMDbResponseLevel(args.get("response_level", "detailed")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.movie_details(movie_id, language, append_to_response)
+        data = await tmdb.movie_details(movie_id, language, append_to_response, response_level)
         await tmdb.close()
         return data
 
@@ -442,10 +442,11 @@ def make_tmdb_tv_details(project_root: Path) -> Callable[[dict], Awaitable[dict]
         tv_id = int(args["tv_id"])
         language = str(args.get("language", "en-US"))
         append_to_response = args.get("append_to_response")  # e.g., "credits,videos,images"
+        response_level = TMDbResponseLevel(args.get("response_level", "detailed")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.tv_details(tv_id, language, append_to_response)
+        data = await tmdb.tv_details(tv_id, language, append_to_response, response_level)
         await tmdb.close()
         return data
 
@@ -458,10 +459,11 @@ def make_tmdb_similar_movies(project_root: Path) -> Callable[[dict], Awaitable[d
         movie_id = int(args["movie_id"])
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.similar_movies(movie_id, language, page)
+        data = await tmdb.similar_movies(movie_id, language, page, response_level)
         await tmdb.close()
         return data
 
@@ -474,10 +476,11 @@ def make_tmdb_similar_tv(project_root: Path) -> Callable[[dict], Awaitable[dict]
         tv_id = int(args["tv_id"])
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.similar_tv(tv_id, language, page)
+        data = await tmdb.similar_tv(tv_id, language, page, response_level)
         await tmdb.close()
         return data
 
@@ -491,10 +494,11 @@ def make_tmdb_search_tv(project_root: Path) -> Callable[[dict], Awaitable[dict]]
         first_air_date_year = args.get("first_air_date_year")
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.search_tv(query, first_air_date_year, language, page)
+        data = await tmdb.search_tv(query, first_air_date_year, language, page, response_level)
         await tmdb.close()
         return data
 
@@ -507,10 +511,11 @@ def make_tmdb_search_multi(project_root: Path) -> Callable[[dict], Awaitable[dic
         query = str(args.get("query", "")).strip()
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.search_multi(query, language, page)
+        data = await tmdb.search_multi(query, language, page, response_level)
         await tmdb.close()
         return data
 
@@ -523,10 +528,11 @@ def make_tmdb_search_person(project_root: Path) -> Callable[[dict], Awaitable[di
         query = str(args.get("query", "")).strip()
         language = str(args.get("language", "en-US"))
         page = int(args.get("page", 1))
+        response_level = TMDbResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
-        data = await tmdb.search_person(query, language, page)
+        data = await tmdb.search_person(query, language, page, response_level)
         await tmdb.close()
         return data
 
@@ -1377,14 +1383,16 @@ def make_get_plex_recently_added(project_root: Path) -> Callable[[dict], Awaitab
     async def impl(args: dict) -> dict:
         section_type = str(args.get("section_type", "movie")).lower()
         limit = int(args.get("limit", 20))
+        response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        items = plex.get_recently_added(section_type, limit)
+        items = plex.get_recently_added(section_type, limit, response_level)
         return {
             "items": items,
             "section_type": section_type,
             "limit": limit,
-            "total_found": len(items)
+            "total_found": len(items),
+            "response_level": response_level.value if response_level else "compact"
         }
 
     return impl
@@ -1393,13 +1401,15 @@ def make_get_plex_recently_added(project_root: Path) -> Callable[[dict], Awaitab
 def make_get_plex_on_deck(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
     async def impl(args: dict) -> dict:
         limit = int(args.get("limit", 20))
+        response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        items = plex.get_on_deck(limit)
+        items = plex.get_on_deck(limit, response_level)
         return {
             "items": items,
             "limit": limit,
-            "total_found": len(items)
+            "total_found": len(items),
+            "response_level": response_level.value if response_level else "compact"
         }
 
     return impl
@@ -1408,13 +1418,15 @@ def make_get_plex_on_deck(project_root: Path) -> Callable[[dict], Awaitable[dict
 def make_get_plex_continue_watching(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
     async def impl(args: dict) -> dict:
         limit = int(args.get("limit", 20))
+        response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        items = plex.get_continue_watching(limit)
+        items = plex.get_continue_watching(limit, response_level)
         return {
             "items": items,
             "limit": limit,
-            "total_found": len(items)
+            "total_found": len(items),
+            "response_level": response_level.value if response_level else "compact"
         }
 
     return impl
@@ -1424,14 +1436,16 @@ def make_get_plex_unwatched(project_root: Path) -> Callable[[dict], Awaitable[di
     async def impl(args: dict) -> dict:
         section_type = str(args.get("section_type", "movie")).lower()
         limit = int(args.get("limit", 20))
+        response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        items = plex.get_unwatched(section_type, limit)
+        items = plex.get_unwatched(section_type, limit, response_level)
         return {
             "items": items,
             "section_type": section_type,
             "limit": limit,
-            "total_found": len(items)
+            "total_found": len(items),
+            "response_level": response_level.value if response_level else "compact"
         }
 
     return impl
@@ -1441,14 +1455,16 @@ def make_get_plex_collections(project_root: Path) -> Callable[[dict], Awaitable[
     async def impl(args: dict) -> dict:
         section_type = str(args.get("section_type", "movie")).lower()
         limit = int(args.get("limit", 50))
+        response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        collections = plex.get_collections(section_type, limit)
+        collections = plex.get_collections(section_type, limit, response_level)
         return {
             "collections": collections,
             "section_type": section_type,
             "limit": limit,
-            "total_found": len(collections)
+            "total_found": len(collections),
+            "response_level": response_level.value if response_level else "compact"
         }
 
     return impl
@@ -1457,13 +1473,15 @@ def make_get_plex_collections(project_root: Path) -> Callable[[dict], Awaitable[
 def make_get_plex_playlists(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
     async def impl(args: dict) -> dict:
         limit = int(args.get("limit", 50))
+        response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        playlists = plex.get_playlists(limit)
+        playlists = plex.get_playlists(limit, response_level)
         return {
             "playlists": playlists,
             "limit": limit,
-            "total_found": len(playlists)
+            "total_found": len(playlists),
+            "response_level": response_level.value if response_level else "compact"
         }
 
     return impl
@@ -1473,14 +1491,16 @@ def make_get_plex_similar_items(project_root: Path) -> Callable[[dict], Awaitabl
     async def impl(args: dict) -> dict:
         rating_key = int(args["rating_key"])
         limit = int(args.get("limit", 10))
+        response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        items = plex.get_similar_items(rating_key, limit)
+        items = plex.get_similar_items(rating_key, limit, response_level)
         return {
             "items": items,
             "rating_key": rating_key,
             "limit": limit,
-            "total_found": len(items)
+            "total_found": len(items),
+            "response_level": response_level.value if response_level else "compact"
         }
 
     return impl
@@ -1503,10 +1523,14 @@ def make_get_plex_extras(project_root: Path) -> Callable[[dict], Awaitable[dict]
 
 def make_get_plex_playback_status(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
     async def impl(args: dict) -> dict:
+        response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        status = plex.get_playback_status()
-        return status
+        status = plex.get_playback_status(response_level)
+        return {
+            **status,
+            "response_level": response_level.value if response_level else "compact"
+        }
 
     return impl
 
@@ -1531,11 +1555,15 @@ def make_get_plex_watch_history(project_root: Path) -> Callable[[dict], Awaitabl
 def make_get_plex_item_details(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
     async def impl(args: dict) -> dict:
         rating_key = int(args["rating_key"])
+        response_level = ResponseLevel(args.get("response_level", "detailed")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        item = plex.get_item_details(rating_key)
+        item = plex.get_item_details(rating_key, response_level)
         if item:
-            return {"item": item}
+            return {
+                "item": item,
+                "response_level": response_level.value if response_level else "detailed"
+            }
         else:
             return {"error": "Item not found", "rating_key": rating_key}
 

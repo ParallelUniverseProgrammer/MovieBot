@@ -5,7 +5,7 @@ from typing import Deque, Dict, List, Tuple
 
 
 # Max number of trailing messages (user + assistant) to include in the model context
-MAX_HISTORY_MESSAGES: int = 12
+MAX_HISTORY_MESSAGES: int = 6
 
 
 class ConversationStore:
