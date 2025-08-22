@@ -207,6 +207,23 @@ def _get_clever_progress_message(
             return f"{core} ({clean_hint})"
         return rng.choice(thinking_messages)
 
+    # 1b) If starting a tool, make it feel kinetic.
+    if n_type == "tool_start":
+        if hint:
+            return f"Opening the toolbox — {hint}"
+        return "Rolling up sleeves… initiating complicated antics…"
+
+    # 1c) If finishing a tool, give a cheeky wrap.
+    if n_type in ("tool_done", "tool_ok", "tool_error"):
+        suffix = "(mostly in one piece)" if n_type != "tool_error" else "(it fought back)"
+        if hint:
+            return f"Crossing that off — {hint} {suffix}"
+        return f"One box checked {suffix}"
+
+    # 1d) If finalizing, imply synthesis.
+    if n_type == "finalizing":
+        return "Polishing the epilogue… arranging punchlines and citations…"
+
     # 2) If we have a tool hint, use it most of the time.
     if hint and rng.random() < 0.7:
         return f"Still working — {hint}"
@@ -256,17 +273,27 @@ class MovieBotClient(discord.Client):
         
         progress_message = None
         progress_update_task = None
-        current_tool = None
-        current_progress_type = None
+        # Event-driven progress updates
+        progress_events: asyncio.Queue = asyncio.Queue()
+        last_rendered = None
+        iteration_counter = 0
         
-        # Progress callback function for the agent
+        # Progress callback function for the agent -> enqueue events
         def progress_callback(progress_type: str, details: str):
-            nonlocal current_tool, current_progress_type
-            current_progress_type = progress_type
-            if progress_type == "tool":
-                current_tool = details
-            elif progress_type == "thinking":
-                current_progress_type = "thinking"
+            try:
+                # Normalize event types from agent
+                mapped_type = progress_type
+                if progress_type == "tool":
+                    mapped_type = "tool_start"
+                # Ensure thread-safety if ever called off-loop
+                loop = asyncio.get_running_loop()
+                loop.call_soon_threadsafe(progress_events.put_nowait, {"type": mapped_type, "details": details})
+            except RuntimeError:
+                # Fallback if no running loop (unlikely here)
+                try:
+                    progress_events.put_nowait({"type": progress_type, "details": details})
+                except Exception:
+                    pass
         
         agent = Agent(api_key=api_key, project_root=self.project_root, provider=provider, progress_callback=progress_callback)  # type: ignore[arg-type]
         
@@ -334,59 +361,46 @@ class MovieBotClient(discord.Client):
                 done = asyncio.Event()
 
                 async def progress_updater():
-                    """Continuously update the progress message with intelligent updates."""
-                    nonlocal progress_message, current_tool, current_progress_type
+                    """Update the progress message only when real events occur."""
+                    nonlocal progress_message, last_rendered, iteration_counter
                     try:
+                        # Wait until either done or threshold elapses
                         await asyncio.wait_for(done.wait(), timeout=progress_ms / 1000)
+                        return  # Completed before we needed any status message
                     except asyncio.TimeoutError:
-                        # Send initial progress message
+                        pass
+
+                    # After threshold, create the status message on first event or use a generic opener
+                    try:
                         try:
-                            progress_message = await message.channel.send(
-                                _get_clever_progress_message(0),  # type: ignore[attr-defined]
-                                silent=True
-                            )
-                            
-                            # Continue updating the message every few seconds
-                            iteration = 1
-                            last_tool = None
-                            last_progress_type = None
-                            
-                            # Get update interval from config - optimized for better performance
-                            update_interval = int(rc.get("ux", {}).get("progressUpdateIntervalMs", 5000)) / 1000  # Increased from 2000ms
-                            update_frequency = int(rc.get("ux", {}).get("progressUpdateFrequency", 2))  # Reduced from 4
-                            
-                            while not done.is_set():
-                                try:
-                                    await asyncio.sleep(update_interval)
-                                    if done.is_set():
-                                        break
-                                    
-                                    # Check if we have new progress information
-                                    tool_changed = current_tool != last_tool
-                                    progress_type_changed = current_progress_type != last_progress_type
-                                    
-                                    # Only update on significant changes or based on frequency to reduce overhead
-                                    if tool_changed or progress_type_changed or iteration % update_frequency == 0:
-                                        # Generate new message based on current state
-                                        new_message = _get_clever_progress_message(  # type: ignore[attr-defined]
-                                            iteration, 
-                                            current_tool, 
-                                            current_progress_type
-                                        )
-                                        
-                                        # Only edit if the message actually changed to avoid unnecessary API calls
-                                        if new_message != progress_message.content:
-                                            await progress_message.edit(content=new_message)
-                                        
-                                        last_tool = current_tool
-                                        last_progress_type = current_progress_type
-                                    
-                                    iteration += 1
-                                except Exception as e:
-                                    log.warning(f"Failed to update progress message: {e}")
-                                    break
-                        except Exception as e:
-                            log.warning(f"Failed to send progress message: {e}")
+                            evt = await asyncio.wait_for(progress_events.get(), timeout=1.0)
+                        except asyncio.TimeoutError:
+                            evt = {"type": "thinking", "details": ""}
+
+                        iteration_counter += 1
+                        initial = _get_clever_progress_message(iteration_counter,  # type: ignore[attr-defined]
+                                                               evt.get("details"),
+                                                               evt.get("type"))
+                        progress_message = await message.channel.send(initial, silent=True)
+                        last_rendered = initial
+
+                        # Consume subsequent events until done
+                        while not done.is_set():
+                            try:
+                                evt = await asyncio.wait_for(progress_events.get(), timeout=30)
+                            except asyncio.TimeoutError:
+                                # No new events for a while; do not update arbitrarily
+                                continue
+
+                            iteration_counter += 1
+                            tool_name = evt.get("details")
+                            ptype = evt.get("type")
+                            new_message = _get_clever_progress_message(iteration_counter, tool_name, ptype)  # type: ignore[attr-defined]
+                            if progress_message and new_message != last_rendered:
+                                await progress_message.edit(content=new_message)
+                                last_rendered = new_message
+                    except Exception as e:
+                        log.warning(f"Failed to send or update progress message: {e}")
 
                 progress_update_task = asyncio.create_task(progress_updater())
 

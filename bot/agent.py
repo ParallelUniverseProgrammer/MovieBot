@@ -227,6 +227,11 @@ class Agent:
                     "content": json.dumps(payload, separators=(",", ":")),
                 })
             # Finalization turn after tools: ask model to produce a user-facing reply
+            if self.progress_callback:
+                try:
+                    self.progress_callback("finalizing", "synthesizing reply")
+                except Exception:
+                    pass
             final_resp = await self._achat_once(messages, model, role)
             try:
                 final_tc = getattr(final_resp.choices[0].message, "tool_calls", None)
@@ -364,6 +369,12 @@ class Agent:
             attempt += 1
         duration_ms = int((time.monotonic() - start) * 1000)
         self.log.info("tool done", extra={"name": name, "status": status, "duration_ms": duration_ms, "attempts": attempt + 1, "cache_hit": cache_hit})
+        # Notify progress callback about tool completion
+        if self.progress_callback:
+            try:
+                self.progress_callback("tool_done" if status == "ok" else "tool_error", name)
+            except Exception:
+                pass
         return tc.id, name, result, attempt + 1, cache_hit
 
     async def _execute_tool_batch(self, tool_batch: List[Any], timeout_ms: int, retry_max: int, backoff_base_ms: int) -> List[tuple]:
@@ -501,6 +512,11 @@ class Agent:
                     "content": json.dumps(payload, separators=(",", ":")),
                 })
             # Finalization turn after tools: ask model to produce a user-facing reply
+            if self.progress_callback:
+                try:
+                    self.progress_callback("finalizing", "synthesizing reply")
+                except Exception:
+                    pass
             final_resp = await self._achat_once(messages, model, role)
             try:
                 final_tc = getattr(final_resp.choices[0].message, "tool_calls", None)
