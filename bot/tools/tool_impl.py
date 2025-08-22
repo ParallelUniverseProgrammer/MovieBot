@@ -95,39 +95,60 @@ def _serialize_datetime(value):
 def _matches_filters(movie, year_min, year_max, genres, actors, directors, 
                     content_rating, rating_min, rating_max):
     """Check if a movie matches all the specified filters."""
-    
+    def _get(field: str):
+        if isinstance(movie, dict):
+            return movie.get(field)
+        return getattr(movie, field, None)
+
     # Year filtering
-    if year_min is not None and getattr(movie, "year", 0) < year_min:
+    year_val = _get("year") or 0
+    if year_min is not None and year_val < year_min:
         return False
-    if year_max is not None and getattr(movie, "year", 9999) > year_max:
+    year_max_val = _get("year") or 9999
+    if year_max is not None and year_max_val > year_max:
         return False
     
     # Genre filtering (any genre match is sufficient)
     if genres:
-        movie_genres = [genre.tag.lower() for genre in getattr(movie, "genres", [])]
+        raw = _get("genres") or []
+        # Serialized dicts carry genres as list[str]; objects as list of tag objects
+        if raw and isinstance(raw[0], str):
+            movie_genres = [g.lower() for g in raw]
+        else:
+            movie_genres = [getattr(genre, "tag", "").lower() for genre in (raw or [])]
         if not any(genre.lower() in movie_genres for genre in genres):
             return False
     
     # Actor filtering (any actor match is sufficient)
     if actors:
-        movie_actors = [actor.tag.lower() for actor in getattr(movie, "actors", [])]
+        raw = _get("actors") or []
+        if raw and isinstance(raw[0], str):
+            movie_actors = [a.lower() for a in raw]
+        else:
+            movie_actors = [getattr(actor, "tag", "").lower() for actor in (raw or [])]
         if not any(actor.lower() in movie_actors for actor in actors):
             return False
     
     # Director filtering (any director match is sufficient)
     if directors:
-        movie_directors = [director.tag.lower() for director in getattr(movie, "directors", [])]
+        raw = _get("directors") or []
+        if raw and isinstance(raw[0], str):
+            movie_directors = [d.lower() for d in raw]
+        else:
+            movie_directors = [getattr(director, "tag", "").lower() for director in (raw or [])]
         if not any(director.lower() in movie_directors for director in directors):
             return False
     
     # Content rating filtering
-    if content_rating and getattr(movie, "contentRating", "") != content_rating:
+    if content_rating and (_get("contentRating") or "") != content_rating:
         return False
     
     # Rating filtering
-    if rating_min is not None and getattr(movie, "rating", 0) < rating_min:
+    rating_val = _get("rating") or 0
+    if rating_min is not None and rating_val < rating_min:
         return False
-    if rating_max is not None and getattr(movie, "rating", 10) > rating_max:
+    rating_max_val = _get("rating") or 10
+    if rating_max is not None and rating_max_val > rating_max:
         return False
     
     return True
@@ -138,7 +159,10 @@ def _sort_movies(movies, sort_by, sort_order):
     reverse = sort_order.lower() == "desc"
     
     def get_sort_key(movie):
-        value = getattr(movie, sort_by, None)
+        if isinstance(movie, dict):
+            value = movie.get(sort_by)
+        else:
+            value = getattr(movie, sort_by, None)
         if value is None:
             return "" if sort_order.lower() == "asc" else "zzzzz"
         return value
@@ -147,7 +171,11 @@ def _sort_movies(movies, sort_by, sort_order):
         return sorted(movies, key=get_sort_key, reverse=reverse)
     except (TypeError, AttributeError):
         # Fallback to title sorting if the specified sort_by fails
-        return sorted(movies, key=lambda m: getattr(m, "title", ""), reverse=reverse)
+        def _title(m):
+            if isinstance(m, dict):
+                return m.get("title", "")
+            return getattr(m, "title", "")
+        return sorted(movies, key=_title, reverse=reverse)
 
 
 def make_set_plex_rating(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
