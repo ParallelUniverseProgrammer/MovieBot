@@ -19,19 +19,21 @@ llm:
       smart: z-ai/glm-4.5-air:free
       worker: z-ai/glm-4.5-air:free
 tools:
-  timeoutMs: 6000  # Reduced from 8000ms for faster failure detection
-  parallelism: 6   # Increased from 4 for better concurrency
-  retryMax: 1      # Reduced from 2 for faster failure
-  backoffBaseMs: 100  # Reduced from 200ms for faster retries
+  timeoutMs: 5000
+  parallelism: 8
+  retryMax: 1
+  backoffBaseMs: 80
 ux:
-  progressThresholdMs: 3000  # Increased from 2000ms to reduce unnecessary progress messages
-  progressUpdateIntervalMs: 5000  # Increased from 2000ms to reduce update frequency
-  progressUpdateFrequency: 2  # Reduced from 4 to reduce overhead
+  progressThresholdMs: 2500
+  progressUpdateIntervalMs: 6000
+  progressUpdateFrequency: 3
 http:
-  connectTimeoutMs: 2000  # Reduced from 3000ms for faster connection failures
-  readTimeoutMs: 8000     # Reduced from 10000ms for faster read timeouts
-  totalTimeoutMs: 12000   # Reduced from 15000ms for faster total timeouts
-  maxConnections: 100
+  connectTimeoutMs: 1500
+  readTimeoutMs: 7000
+  totalTimeoutMs: 10000
+  maxConnections: 128
+  retryMax: 1
+  backoffBaseMs: 80
 cache:
   ttlShortSec: 60
   ttlMediumSec: 300

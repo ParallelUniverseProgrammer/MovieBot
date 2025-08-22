@@ -5,6 +5,7 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+from pathlib import Path
 
 import aiohttp
 
@@ -13,12 +14,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class HttpConfig:
-    connect_timeout_ms: int = 3000
-    read_timeout_ms: int = 10000
-    total_timeout_ms: int = 15000
+    connect_timeout_ms: int = 2000
+    read_timeout_ms: int = 8000
+    total_timeout_ms: int = 12000
     max_connections: int = 100
-    retry_max: int = 2
-    backoff_base_ms: int = 200
+    retry_max: int = 1
+    backoff_base_ms: int = 100
 
 
 class SharedHttpClient:
@@ -54,7 +55,23 @@ class SharedHttpClient:
     @classmethod
     def instance(cls) -> "SharedHttpClient":
         if cls._instance is None:
-            cls._instance = SharedHttpClient()
+            # Attempt to load runtime HTTP config
+            try:
+                from config.loader import load_runtime_config
+                project_root = Path(__file__).resolve().parents[1]
+                rc = load_runtime_config(project_root)
+                http_cfg = rc.get("http", {}) or {}
+                cfg = HttpConfig(
+                    connect_timeout_ms=int(http_cfg.get("connectTimeoutMs", HttpConfig.connect_timeout_ms)),
+                    read_timeout_ms=int(http_cfg.get("readTimeoutMs", HttpConfig.read_timeout_ms)),
+                    total_timeout_ms=int(http_cfg.get("totalTimeoutMs", HttpConfig.total_timeout_ms)),
+                    max_connections=int(http_cfg.get("maxConnections", HttpConfig.max_connections)),
+                    retry_max=int(http_cfg.get("retryMax", HttpConfig.retry_max)) if "retryMax" in http_cfg else HttpConfig.retry_max,
+                    backoff_base_ms=int(http_cfg.get("backoffBaseMs", HttpConfig.backoff_base_ms)) if "backoffBaseMs" in http_cfg else HttpConfig.backoff_base_ms,
+                )
+            except Exception:
+                cfg = HttpConfig()
+            cls._instance = SharedHttpClient(config=cfg)
         return cls._instance
 
     async def close(self) -> None:

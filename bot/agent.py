@@ -120,8 +120,10 @@ class Agent:
         if should_add_prefs:
             try:
                 prefs_path = self.project_root / "data" / "household_preferences.json"
-                with open(prefs_path, "r", encoding="utf-8") as f:
-                    prefs = json.load(f)
+                def _read_prefs():
+                    with open(prefs_path, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                prefs = await asyncio.to_thread(_read_prefs)
                 compact = build_preferences_context(prefs)
                 if compact.strip():
                     messages.append({
@@ -377,8 +379,10 @@ class Agent:
         if should_add_prefs:
             try:
                 prefs_path = self.project_root / "data" / "household_preferences.json"
-                with open(prefs_path, "r", encoding="utf-8") as f:
-                    prefs = json.load(f)
+                def _read_prefs():
+                    with open(prefs_path, "r", encoding="utf-8") as f:
+                        return json.load(f)
+                prefs = await asyncio.to_thread(_read_prefs)
                 compact = build_preferences_context(prefs)
                 if compact.strip():
                     messages.append({

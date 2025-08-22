@@ -141,7 +141,7 @@ Remember: Search for ALL episodes, not just some of them!
         model = sel.get("model", "gpt-5-nano")
 
         # Single iteration for focused task
-        response = self._chat_once(messages, model, "worker")
+        response = await self._achat_once(messages, model, "worker")
         
         try:
             content = response.choices[0].message.content or ""
@@ -167,7 +167,7 @@ Remember: Search for ALL episodes, not just some of them!
                     for tc, result in zip(tool_calls, results)
                 ]
                 
-                final_response = self._chat_once(final_messages, model, "worker")
+                final_response = await self._achat_once(final_messages, model, "worker")
                 final_content = final_response.choices[0].message.content or ""
                 
                 self.log.info(f"Episode fallback search completed. Final response: {final_content[:200]}...")
@@ -205,42 +205,32 @@ Remember: Search for ALL episodes, not just some of them!
             }
 
     async def _execute_tool_calls(self, tool_calls: List[Any]) -> List[Dict[str, Any]]:
-        """Execute tool calls and return results."""
-        results = []
-        
-        for tool_call in tool_calls:
+        """Execute tool calls concurrently and return results in order."""
+        async def _run_one(tc):
+            name = getattr(tc.function, "name", "<unknown>")
+            args_json = getattr(tc.function, "arguments", "{}") or "{}"
             try:
-                name = tool_call.function.name
-                args_json = tool_call.function.arguments or "{}"
-                
                 self.log.info(f"Sub-agent executing tool: {name} with args: {args_json}")
-                
-                # Parse args
                 try:
                     args = json.loads(args_json)
                 except json.JSONDecodeError as e:
-                    result = {"ok": False, "error": "invalid_json", "details": str(e)}
-                    results.append(result)
                     self.log.error(f"JSON decode error in tool {name}: {e}")
-                    continue
+                    return {"ok": False, "error": "invalid_json", "details": str(e)}
 
-                # Execute tool
                 tool_func = self.tool_registry.get(name)
                 if not tool_func:
-                    result = {"ok": False, "error": f"Tool {name} not found in registry"}
                     self.log.error(f"Tool {name} not found in registry")
-                    results.append(result)
-                    continue
-                
+                    return {"ok": False, "error": f"Tool {name} not found in registry"}
+
                 result = await tool_func(args)
                 self.log.info(f"Tool {name} completed with result: {str(result)[:200]}...")
-                results.append(result)
-                
+                return result
             except Exception as e:
                 self.log.error(f"Error executing tool {name}: {e}")
-                results.append({"ok": False, "error": str(e)})
-        
-        return results
+                return {"ok": False, "error": str(e)}
+
+        # Execute all tool calls concurrently preserving order
+        return await asyncio.gather(*[_run_one(tc) for tc in tool_calls])
 
     async def handle_quality_fallback(self, series_id: int, target_quality: str, 
                                     fallback_qualities: List[str]) -> Dict[str, Any]:
@@ -278,7 +268,7 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
         _, sel = resolve_llm_selection(self.project_root, "worker")
         model = sel.get("model", "gpt-5-nano")
 
-        response = self._chat_once(messages, model, "worker")
+        response = await self._achat_once(messages, model, "worker")
         
         try:
             content = response.choices[0].message.content or ""
@@ -301,7 +291,7 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
                     for tc, result in zip(tool_calls, results)
                 ]
                 
-                final_response = self._chat_once(final_messages, model)
+                final_response = await self._achat_once(final_messages, model, "worker")
                 return {
                     "success": True,
                     "content": final_response.choices[0].message.content,

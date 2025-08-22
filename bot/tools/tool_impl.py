@@ -32,15 +32,16 @@ def make_search_plex(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
         
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        
-        # Get all movies if no query, otherwise search
+
+        # Get all movies if no query, otherwise search (run blocking plexapi calls in a thread)
         if query:
-            results = plex.search_movies(query, response_level)
+            results = await asyncio.to_thread(plex.search_movies, query, response_level)
         else:
-            # Get all movies from the library
-            movie_library = plex.plex.library.section("Movies")
-            results = movie_library.all()
-            results = plex._serialize_items(results, response_level)
+            def _fetch_all_movies():
+                movie_library = plex.get_movie_library()
+                items = movie_library.all()
+                return plex._serialize_items(items, response_level)
+            results = await asyncio.to_thread(_fetch_all_movies)
         
         # Apply filters (only if we have detailed data)
         if response_level in [ResponseLevel.STANDARD, ResponseLevel.DETAILED]:
@@ -148,7 +149,7 @@ def make_set_plex_rating(project_root: Path) -> Callable[[dict], Awaitable[dict]
         rating = int(args["rating"])  # raises if missing
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        plex.set_rating(rating_key, rating)
+        await asyncio.to_thread(plex.set_rating, rating_key, rating)
         return {"ok": True}
 
     return impl
@@ -166,7 +167,6 @@ def make_tmdb_search(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.search_movie(query, year, primary_release_year, language, page, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -182,7 +182,6 @@ def make_tmdb_recommendations(project_root: Path) -> Callable[[dict], Awaitable[
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.recommendations(tmdb_id, language, page, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -226,7 +225,6 @@ def make_tmdb_discover_movies(project_root: Path) -> Callable[[dict], Awaitable[
             page=page,
             response_level=response_level
         )
-        await tmdb.close()
         return data
 
     return impl
@@ -268,7 +266,6 @@ def make_tmdb_discover_tv(project_root: Path) -> Callable[[dict], Awaitable[dict
             page=page,
             response_level=response_level
         )
-        await tmdb.close()
         return data
 
     return impl
@@ -285,7 +282,6 @@ def make_tmdb_trending(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.trending(media_type, time_window, language, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -301,7 +297,6 @@ def make_tmdb_popular_movies(project_root: Path) -> Callable[[dict], Awaitable[d
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.popular_movies(language, page, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -317,7 +312,6 @@ def make_tmdb_top_rated_movies(project_root: Path) -> Callable[[dict], Awaitable
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.top_rated_movies(language, page, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -333,7 +327,6 @@ def make_tmdb_upcoming_movies(project_root: Path) -> Callable[[dict], Awaitable[
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.upcoming_movies(language, page, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -349,7 +342,6 @@ def make_tmdb_now_playing_movies(project_root: Path) -> Callable[[dict], Awaitab
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.now_playing_movies(language, page, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -365,7 +357,6 @@ def make_tmdb_popular_tv(project_root: Path) -> Callable[[dict], Awaitable[dict]
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.popular_tv(language, page, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -381,7 +372,6 @@ def make_tmdb_top_rated_tv(project_root: Path) -> Callable[[dict], Awaitable[dic
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.top_rated_tv(language, page, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -397,7 +387,6 @@ def make_tmdb_on_the_air_tv(project_root: Path) -> Callable[[dict], Awaitable[di
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.on_the_air_tv(language, page, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -413,7 +402,6 @@ def make_tmdb_airing_today_tv(project_root: Path) -> Callable[[dict], Awaitable[
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.airing_today_tv(language, page, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -430,7 +418,6 @@ def make_tmdb_movie_details(project_root: Path) -> Callable[[dict], Awaitable[di
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.movie_details(movie_id, language, append_to_response, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -447,7 +434,6 @@ def make_tmdb_tv_details(project_root: Path) -> Callable[[dict], Awaitable[dict]
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.tv_details(tv_id, language, append_to_response, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -464,7 +450,6 @@ def make_tmdb_similar_movies(project_root: Path) -> Callable[[dict], Awaitable[d
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.similar_movies(movie_id, language, page, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -481,7 +466,6 @@ def make_tmdb_similar_tv(project_root: Path) -> Callable[[dict], Awaitable[dict]
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.similar_tv(tv_id, language, page, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -499,7 +483,6 @@ def make_tmdb_search_tv(project_root: Path) -> Callable[[dict], Awaitable[dict]]
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.search_tv(query, first_air_date_year, language, page, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -516,7 +499,6 @@ def make_tmdb_search_multi(project_root: Path) -> Callable[[dict], Awaitable[dic
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.search_multi(query, language, page, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -533,7 +515,6 @@ def make_tmdb_search_person(project_root: Path) -> Callable[[dict], Awaitable[di
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.search_person(query, language, page, response_level)
-        await tmdb.close()
         return data
 
     return impl
@@ -548,7 +529,6 @@ def make_tmdb_genres(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.genres(media_type, language)
-        await tmdb.close()
         return data
 
     return impl
@@ -563,7 +543,6 @@ def make_tmdb_collection_details(project_root: Path) -> Callable[[dict], Awaitab
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.collection_details(collection_id, language)
-        await tmdb.close()
         return data
 
     return impl
@@ -578,7 +557,6 @@ def make_tmdb_watch_providers_movie(project_root: Path) -> Callable[[dict], Awai
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.watch_providers_movie(movie_id, language)
-        await tmdb.close()
         return data
 
     return impl
@@ -593,7 +571,6 @@ def make_tmdb_watch_providers_tv(project_root: Path) -> Callable[[dict], Awaitab
         settings = load_settings(project_root)
         tmdb = TMDbClient(settings.tmdb_api_key or "")
         data = await tmdb.watch_providers_tv(tv_id, language)
-        await tmdb.close()
         return data
 
     return impl
@@ -1441,8 +1418,10 @@ def make_read_household_preferences(project_root: Path) -> Callable[[dict], Awai
     async def impl(args: dict) -> dict:
         path = project_root / "data" / "household_preferences.json"
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            def _read():
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            data = await asyncio.to_thread(_read)
         except FileNotFoundError:
             data = {}
 
@@ -1479,16 +1458,20 @@ def make_update_household_preferences(project_root: Path) -> Callable[[dict], Aw
         patch = args.get("patch", {})
         path = project_root / "data" / "household_preferences.json"
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            def _read():
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            data = await asyncio.to_thread(_read)
         except FileNotFoundError:
             data = {}
         if not isinstance(patch, dict):
             raise ValueError("patch must be an object")
         data.update(patch)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        def _write():
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        await asyncio.to_thread(_write)
         return {"ok": True}
 
     return impl
@@ -1500,8 +1483,10 @@ def make_search_household_preferences(project_root: Path) -> Callable[[dict], Aw
         limit = int(args.get("limit", 10))
         path = project_root / "data" / "household_preferences.json"
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            def _read():
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            data = await asyncio.to_thread(_read)
         except FileNotFoundError:
             return {"matches": []}
         flat = _flatten(data)
@@ -1521,8 +1506,10 @@ def make_query_household_preferences(project_root: Path, llm_client) -> Callable
         
         path = project_root / "data" / "household_preferences.json"
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            def _read():
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            data = await asyncio.to_thread(_read)
         except FileNotFoundError:
             return {"error": "Household preferences not found"}
         
@@ -1579,7 +1566,7 @@ def make_get_plex_library_sections(project_root: Path) -> Callable[[dict], Await
     async def impl(args: dict) -> dict:
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        sections = plex.get_library_sections()
+        sections = await asyncio.to_thread(plex.get_library_sections)
         return {"sections": sections}
 
     return impl
@@ -1592,7 +1579,7 @@ def make_get_plex_recently_added(project_root: Path) -> Callable[[dict], Awaitab
         response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        items = plex.get_recently_added(section_type, limit, response_level)
+        items = await asyncio.to_thread(plex.get_recently_added, section_type, limit, response_level)
         return {
             "items": items,
             "section_type": section_type,
@@ -1610,7 +1597,7 @@ def make_get_plex_on_deck(project_root: Path) -> Callable[[dict], Awaitable[dict
         response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        items = plex.get_on_deck(limit, response_level)
+        items = await asyncio.to_thread(plex.get_on_deck, limit, response_level)
         return {
             "items": items,
             "limit": limit,
@@ -1627,7 +1614,7 @@ def make_get_plex_continue_watching(project_root: Path) -> Callable[[dict], Awai
         response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        items = plex.get_continue_watching(limit, response_level)
+        items = await asyncio.to_thread(plex.get_continue_watching, limit, response_level)
         return {
             "items": items,
             "limit": limit,
@@ -1645,7 +1632,7 @@ def make_get_plex_unwatched(project_root: Path) -> Callable[[dict], Awaitable[di
         response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        items = plex.get_unwatched(section_type, limit, response_level)
+        items = await asyncio.to_thread(plex.get_unwatched, section_type, limit, response_level)
         return {
             "items": items,
             "section_type": section_type,
@@ -1664,7 +1651,7 @@ def make_get_plex_collections(project_root: Path) -> Callable[[dict], Awaitable[
         response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        collections = plex.get_collections(section_type, limit, response_level)
+        collections = await asyncio.to_thread(plex.get_collections, section_type, limit, response_level)
         return {
             "collections": collections,
             "section_type": section_type,
@@ -1682,7 +1669,7 @@ def make_get_plex_playlists(project_root: Path) -> Callable[[dict], Awaitable[di
         response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        playlists = plex.get_playlists(limit, response_level)
+        playlists = await asyncio.to_thread(plex.get_playlists, limit, response_level)
         return {
             "playlists": playlists,
             "limit": limit,
@@ -1700,7 +1687,7 @@ def make_get_plex_similar_items(project_root: Path) -> Callable[[dict], Awaitabl
         response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        items = plex.get_similar_items(rating_key, limit, response_level)
+        items = await asyncio.to_thread(plex.get_similar_items, rating_key, limit, response_level)
         return {
             "items": items,
             "rating_key": rating_key,
@@ -1717,7 +1704,7 @@ def make_get_plex_extras(project_root: Path) -> Callable[[dict], Awaitable[dict]
         rating_key = int(args["rating_key"])
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        extras = plex.get_extras(rating_key)
+        extras = await asyncio.to_thread(plex.get_extras, rating_key)
         return {
             "extras": extras,
             "rating_key": rating_key,
@@ -1732,7 +1719,7 @@ def make_get_plex_playback_status(project_root: Path) -> Callable[[dict], Awaita
         response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        status = plex.get_playback_status(response_level)
+        status = await asyncio.to_thread(plex.get_playback_status, response_level)
         return {
             **status,
             "response_level": response_level.value if response_level else "compact"
@@ -1747,7 +1734,7 @@ def make_get_plex_watch_history(project_root: Path) -> Callable[[dict], Awaitabl
         limit = int(args.get("limit", 20))
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        history = plex.get_watch_history(rating_key, limit)
+        history = await asyncio.to_thread(plex.get_watch_history, rating_key, limit)
         return {
             "history": history,
             "rating_key": rating_key,
@@ -1764,7 +1751,7 @@ def make_get_plex_item_details(project_root: Path) -> Callable[[dict], Awaitable
         response_level = ResponseLevel(args.get("response_level", "detailed")) if args.get("response_level") else None
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        item = plex.get_item_details(rating_key, response_level)
+        item = await asyncio.to_thread(plex.get_item_details, rating_key, response_level)
         if item:
             return {
                 "item": item,
