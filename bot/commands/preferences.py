@@ -7,25 +7,7 @@ from typing import Optional
 import discord
 from discord import app_commands
 
-from ..tools.tool_impl import build_preferences_context
-
-
-def _prefs_path(project_root: Path) -> Path:
-    return project_root / "data" / "household_preferences.json"
-
-
-def _read_prefs(path: Path) -> dict:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def _write_prefs(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+from ..tools.tool_impl import build_preferences_context, PreferencesStore
 
 
 def register(client: discord.Client) -> None:
@@ -47,7 +29,8 @@ def register(client: discord.Client) -> None:
         await interaction.response.defer(ephemeral=True)
         
         try:
-            data = _read_prefs(_prefs_path(client.project_root))
+            store = PreferencesStore(client.project_root)
+            data = await store.load()
             
             if path:
                 # Navigate to specific path
@@ -93,8 +76,8 @@ def register(client: discord.Client) -> None:
         await interaction.response.defer(ephemeral=True)
         
         try:
-            path = _prefs_path(client.project_root)
-            data = _read_prefs(path)
+            store = PreferencesStore(client.project_root)
+            data = await store.load()
             
             try:
                 value = json.loads(json_value)
@@ -102,8 +85,9 @@ def register(client: discord.Client) -> None:
                 await interaction.followup.send(f"❌ Invalid JSON: {e}", ephemeral=True)
                 return
             
-            data[key] = value
-            _write_prefs(path, data)
+            # Support dotted path
+            data = store._set_by_path(data, key, value)
+            await store.save(data)
             
             await interaction.followup.send(
                 f"✅ Updated preference '{key}' to: {json_value}", 
@@ -122,31 +106,19 @@ def register(client: discord.Client) -> None:
         await interaction.response.defer(ephemeral=True)
         
         try:
-            path = _prefs_path(client.project_root)
-            data = _read_prefs(path)
-            
-            if key not in data:
-                data[key] = []
-            
-            if not isinstance(data[key], list):
-                await interaction.followup.send(
-                    f"❌ Preference '{key}' is not a list. Use /prefs set instead.", 
-                    ephemeral=True
-                )
-                return
-            
-            if value in data[key]:
-                await interaction.followup.send(
-                    f"⚠️ Value '{value}' already exists in '{key}'", 
-                    ephemeral=True
-                )
-                return
-            
-            data[key].append(value)
-            _write_prefs(path, data)
+            store = PreferencesStore(client.project_root)
+            data = await store.load()
+            try:
+                # Try JSON decode for rich values
+                parsed: object = json.loads(value)
+            except Exception:
+                parsed = value
+            # Append to list at dotted path
+            data = store._list_append(data, key, parsed)
+            await store.save(data)
             
             await interaction.followup.send(
-                f"✅ Added '{value}' to '{key}'. Current values: {', '.join(data[key])}", 
+                f"✅ Added '{value}' to '{key}'.", 
                 ephemeral=True
             )
             
@@ -162,27 +134,16 @@ def register(client: discord.Client) -> None:
         await interaction.response.defer(ephemeral=True)
         
         try:
-            path = _prefs_path(client.project_root)
-            data = _read_prefs(path)
-            
-            if key not in data or not isinstance(data[key], list):
-                await interaction.followup.send(
-                    f"❌ Preference '{key}' is not a list or doesn't exist", 
-                    ephemeral=True
-                )
-                return
-            
-            if value not in data[key]:
-                await interaction.followup.send(
-                    f"⚠️ Value '{value}' not found in '{key}'", 
-                    ephemeral=True
-                )
-                return
-            
-            data[key].remove(value)
-            _write_prefs(path, data)
-            
-            remaining = ', '.join(data[key]) if data[key] else 'none'
+            store = PreferencesStore(client.project_root)
+            data = await store.load()
+            try:
+                parsed: object = json.loads(value)
+            except Exception:
+                parsed = value
+            data = store._list_remove_value(data, key, parsed)
+            await store.save(data)
+            remaining_path_val = store._get_by_path(data, key)
+            remaining = ', '.join(remaining_path_val) if isinstance(remaining_path_val, list) and remaining_path_val else 'none'
             await interaction.followup.send(
                 f"✅ Removed '{value}' from '{key}'. Remaining values: {remaining}", 
                 ephemeral=True
@@ -200,8 +161,8 @@ def register(client: discord.Client) -> None:
         await interaction.response.defer(ephemeral=True)
         
         try:
-            path = _prefs_path(client.project_root)
-            data = _read_prefs(path)
+            store = PreferencesStore(client.project_root)
+            data = await store.load()
             
             # Simple text search through preferences
             results = []
@@ -237,19 +198,21 @@ def register(client: discord.Client) -> None:
         await interaction.response.defer(ephemeral=True)
         
         try:
-            path = _prefs_path(client.project_root)
-            data = _read_prefs(path)
+            store = PreferencesStore(client.project_root)
+            data = await store.load()
             
             if not data:
                 await interaction.followup.send("No preferences to reset", ephemeral=True)
                 return
             
             # Create backup
-            backup_path = path.with_suffix('.json.backup')
-            _write_prefs(backup_path, data)
+            backup_path = (client.project_root / "data" / "household_preferences.json").with_suffix('.json.backup')
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(backup_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
             
             # Reset to empty
-            _write_prefs(path, {})
+            await store.save({})
             
             await interaction.followup.send(
                 f"✅ Reset all preferences. Backup saved to {backup_path.name}", 

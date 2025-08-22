@@ -517,8 +517,13 @@ def _define_openai_tools() -> List[Dict[str, Any]]:
             "query": {"type": "string"},
             "limit": {"type": ["integer", "null"]}
         }),
-        fn("update_household_preferences", "Update the household preferences by merging a JSON object.", {
-            "patch": {"type": "object"}
+        fn("update_household_preferences", "Update preferences via deep-merge patch, path set, list ops, or JSON Patch.", {
+            "patch": {"type": ["object", "null"], "description": "Object to deep-merge into preferences"},
+            "path": {"type": ["string", "null"], "description": "Dotted path for targeted update (e.g., 'likes.genres')"},
+            "value": {"type": ["string", "number", "boolean", "object", "array", "null"], "description": "Value to set when using path"},
+            "append": {"type": ["string", "number", "boolean", "object", "array", "null"], "description": "Append value to list at path (creates list if missing)"},
+            "remove_value": {"type": ["string", "number", "boolean", "object", "array", "null"], "description": "Remove value from list at path (no-op if not present)"},
+            "ops": {"type": ["array", "null"], "items": {"type": "object"}, "description": "JSON Patch operations: add/replace/remove with /path"}
         }),
         fn("query_household_preferences", "Query household preferences using GPT-5 and get a concise one-sentence answer.", {
             "query": {"type": "string", "description": "The question to ask about household preferences"}

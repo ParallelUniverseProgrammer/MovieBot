@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import json
 import asyncio
+import os
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Tuple, Union
+
+try:
+    import orjson  # type: ignore
+except Exception:  # pragma: no cover
+    orjson = None
 
 from config.loader import load_settings, load_runtime_config
 from integrations.plex_client import PlexClient, ResponseLevel
@@ -1254,8 +1260,11 @@ def _as_list(value: Any) -> List[str]:
     return [str(value)]
 
 
-def _join(values: List[str], *, empty: str = "-") -> str:
-    return ", ".join(values) if values else empty
+def _join(values: List[str], *, empty: str = "-", max_items: int | None = None) -> str:
+    if not values:
+        return empty
+    items = values if (max_items is None or len(values) <= max_items) else values[:max_items] + ["…"]
+    return ", ".join(items)
 
 
 def _pick(obj: Dict[str, Any], *keys: str) -> Any:
@@ -1286,21 +1295,21 @@ def build_preferences_context(data: Dict[str, Any]) -> str:
     header = "; ".join(header_bits)
 
     # Likes / dislikes
-    like_genres = _join(_as_list(likes.get("genres")))
-    like_people = _join(_as_list(likes.get("people")))
-    like_vibes = _join(_as_list(likes.get("vibes")))
-    like_aesthetics = _join(_as_list(likes.get("aesthetics")))
-    like_motifs = _join(_as_list(likes.get("motifs")))
+    like_genres = _join(_as_list(likes.get("genres")), max_items=8)
+    like_people = _join(_as_list(likes.get("people")), max_items=8)
+    like_vibes = _join(_as_list(likes.get("vibes")), max_items=8)
+    like_aesthetics = _join(_as_list(likes.get("aesthetics")), max_items=8)
+    like_motifs = _join(_as_list(likes.get("motifs")), max_items=8)
 
-    dislike_genres = _join(_as_list(dislikes.get("genres")))
-    dislike_aesthetics = _join(_as_list(dislikes.get("aesthetics")))
-    dislike_tones = _join(_as_list(dislikes.get("tones")))
-    dislike_structure = _join(_as_list(dislikes.get("structure")))
-    dislike_vibes = _join(_as_list(dislikes.get("vibes")))
+    dislike_genres = _join(_as_list(dislikes.get("genres")), max_items=8)
+    dislike_aesthetics = _join(_as_list(dislikes.get("aesthetics")), max_items=8)
+    dislike_tones = _join(_as_list(dislikes.get("tones")), max_items=8)
+    dislike_structure = _join(_as_list(dislikes.get("structure")), max_items=8)
+    dislike_vibes = _join(_as_list(dislikes.get("vibes")), max_items=8)
 
     # Constraints
     era_min = constraints.get("eraMinYear")
-    lang_whitelist = _join(_as_list(_pick(constraints, "languageWhitelist", "languages")))
+    lang_whitelist = _join(_as_list(_pick(constraints, "languageWhitelist", "languages")), max_items=6)
     rt = constraints.get("runtimeSweetSpotMins") or []
     rt_str = f"{rt[0]}–{rt[1]} min" if isinstance(rt, list) and len(rt) == 2 else "-"
     cw = _join(_as_list(constraints.get("contentWarnings")))
@@ -1321,15 +1330,15 @@ def build_preferences_context(data: Dict[str, Any]) -> str:
     humor_hor = _pick(profile.get("humor", {}), "horror") if isinstance(profile.get("humor"), dict) else None
 
     # Anchors
-    loved = _join(_as_list(anchors.get("loved")))
-    responded = _join(_as_list(_pick(anchors, "respondedTo", "responded")))
-    comfort = _join(_as_list(anchors.get("comfortSignals")))
-    faces = _join(_as_list(_pick(anchors, "trustedFaces", "faces")))
+    loved = _join(_as_list(anchors.get("loved")), max_items=8)
+    responded = _join(_as_list(_pick(anchors, "respondedTo", "responded")), max_items=8)
+    comfort = _join(_as_list(anchors.get("comfortSignals")), max_items=8)
+    faces = _join(_as_list(_pick(anchors, "trustedFaces", "faces")), max_items=8)
 
     # Heuristics
     lead = heuristics.get("lead")
     pairing = heuristics.get("pairing")
-    themes = _join(_as_list(heuristics.get("themes")))
+    themes = _join(_as_list(heuristics.get("themes")), max_items=8)
     chamber = heuristics.get("chamber")
     slow_burn = heuristics.get("slowBurn")
     exposition = heuristics.get("exposition")
@@ -1338,11 +1347,11 @@ def build_preferences_context(data: Dict[str, Any]) -> str:
     max_options = heuristics.get("maxOptions")
 
     # Curiosities
-    vibes_tonight = _join(_as_list(_pick(curiosities, "vibesTonight", "vibes")))
-    themes_soon = _join(_as_list(_pick(curiosities, "themesSoon", "themes")))
+    vibes_tonight = _join(_as_list(_pick(curiosities, "vibesTonight", "vibes")), max_items=6)
+    themes_soon = _join(_as_list(_pick(curiosities, "themesSoon", "themes")), max_items=6)
 
-    anti = _join(_as_list(data.get("antiPreferences")))
-    never_titles = _join(_as_list(data.get("neverRecommend", {}).get("titles")))
+    anti = _join(_as_list(data.get("antiPreferences")), max_items=8)
+    never_titles = _join(_as_list(data.get("neverRecommend", {}).get("titles")), max_items=8)
 
     parts: List[str] = []
     if header:
@@ -1412,19 +1421,146 @@ def build_preferences_context(data: Dict[str, Any]) -> str:
     if never_titles and never_titles != "-":
         parts.append(f"Never recommend: titles [{never_titles}].")
 
-    return "\n".join(parts)
+    out = "\n".join(parts)
+    # Hard cap to keep context efficient
+    if len(out) > 1800:
+        out = out[:1797] + "…"
+    return out
+
+
+class PreferencesStore:
+    """Async, cached preferences store with deep-merge and path ops."""
+    def __init__(self, project_root: Path) -> None:
+        self.path = project_root / "data" / "household_preferences.json"
+        self._cache: Dict[str, Any] | None = None
+        self._mtime: float | None = None
+        self._lock = asyncio.Lock()
+        self._size: int | None = None
+
+    def _loads(self, data: bytes | str) -> Dict[str, Any]:
+        if orjson:
+            return orjson.loads(data)  # type: ignore[arg-type]
+        return json.loads(data)  # type: ignore[arg-type]
+
+    def _dumps(self, obj: Any) -> bytes:
+        if orjson:
+            return orjson.dumps(obj, option=orjson.OPT_INDENT_2)
+        return json.dumps(obj, indent=2).encode("utf-8")
+
+    async def _read_file(self) -> Dict[str, Any]:
+        def _read() -> Dict[str, Any]:
+            with open(self.path, "rb") as f:
+                raw = f.read()
+            return self._loads(raw)
+        return await asyncio.to_thread(_read)
+
+    async def _write_file(self, data: Dict[str, Any]) -> None:
+        def _write() -> None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.path, "wb") as f:
+                f.write(self._dumps(data))
+        await asyncio.to_thread(_write)
+
+    async def load(self) -> Dict[str, Any]:
+        async with self._lock:
+            try:
+                st = os.stat(self.path)
+                mtime = st.st_mtime
+                size = st.st_size
+            except FileNotFoundError:
+                self._cache = {}
+                self._mtime = None
+                self._size = None
+                return {}
+
+            # Re-read if cache missing or file characteristics changed
+            if self._cache is None or self._mtime != mtime or self._size != size:
+                self._cache = await self._read_file()
+                self._mtime = mtime
+                self._size = size
+            return self._cache
+
+    async def save(self, data: Dict[str, Any]) -> None:
+        async with self._lock:
+            await self._write_file(data)
+            try:
+                st = os.stat(self.path)
+                self._mtime = st.st_mtime
+                self._size = st.st_size
+            except FileNotFoundError:
+                self._mtime = None
+                self._size = None
+            self._cache = data
+
+    def _ensure_container_for_path(self, data: Dict[str, Any], parts: List[str]) -> Dict[str, Any]:
+        cur: Any = data
+        for p in parts[:-1]:
+            if not isinstance(cur, dict):
+                return data
+            if p not in cur or not isinstance(cur[p], (dict, list)):
+                cur[p] = {}
+            cur = cur[p]
+        return data
+
+    def _get_by_path(self, data: Dict[str, Any], dotted_path: str) -> Any:
+        cur: Any = data
+        for part in dotted_path.split('.'):
+            if isinstance(cur, dict) and part in cur:
+                cur = cur[part]
+            else:
+                return None
+        return cur
+
+    def _set_by_path(self, data: Dict[str, Any], dotted_path: str, value: Any) -> Dict[str, Any]:
+        parts = dotted_path.split('.')
+        self._ensure_container_for_path(data, parts)
+        cur: Any = data
+        for p in parts[:-1]:
+            cur = cur[p]
+        cur[parts[-1]] = value
+        return data
+
+    def _list_append(self, data: Dict[str, Any], dotted_path: str, value: Any) -> Dict[str, Any]:
+        parts = dotted_path.split('.')
+        self._ensure_container_for_path(data, parts)
+        cur: Any = data
+        for p in parts[:-1]:
+            cur = cur[p]
+        lst = cur.get(parts[-1])
+        if lst is None:
+            cur[parts[-1]] = [value]
+            return data
+        if not isinstance(lst, list):
+            raise ValueError(f"Path '{dotted_path}' is not a list")
+        if value not in lst:
+            lst.append(value)
+        return data
+
+    def _list_remove_value(self, data: Dict[str, Any], dotted_path: str, value: Any) -> Dict[str, Any]:
+        cur = self._get_by_path(data, dotted_path)
+        if not isinstance(cur, list):
+            raise ValueError(f"Path '{dotted_path}' is not a list")
+        try:
+            cur.remove(value)
+        except ValueError:
+            pass
+        return data
+
+    def _deep_merge(self, base: Any, patch: Any) -> Any:
+        if isinstance(base, dict) and isinstance(patch, dict):
+            for k, v in patch.items():
+                if k in base:
+                    base[k] = self._deep_merge(base[k], v)
+                else:
+                    base[k] = v
+            return base
+        return patch
 
 
 def make_read_household_preferences(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    store = PreferencesStore(project_root)
     async def impl(args: dict) -> dict:
-        path = project_root / "data" / "household_preferences.json"
-        try:
-            def _read():
-                with open(path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            data = await asyncio.to_thread(_read)
-        except FileNotFoundError:
-            data = {}
+        data = await store.load()
 
         keys = args.get("keys")
         jpath = args.get("path")
@@ -1455,25 +1591,81 @@ def make_read_household_preferences(project_root: Path) -> Callable[[dict], Awai
 
 
 def make_update_household_preferences(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    store = PreferencesStore(project_root)
     async def impl(args: dict) -> dict:
-        patch = args.get("patch", {})
-        path = project_root / "data" / "household_preferences.json"
-        try:
-            def _read():
-                with open(path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            data = await asyncio.to_thread(_read)
-        except FileNotFoundError:
-            data = {}
-        if not isinstance(patch, dict):
-            raise ValueError("patch must be an object")
-        data.update(patch)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        def _write():
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        await asyncio.to_thread(_write)
-        return {"ok": True}
+        # Supports: patch (deep merge), path+value (set), append/remove_value for lists, and json patch ops
+        patch = args.get("patch")
+        dotted_path = args.get("path")
+        value: Any = args.get("value")
+        append = args.get("append")
+        remove_value = args.get("remove_value")
+        ops = args.get("ops")
+
+        # Allow stringified JSON value to be parsed
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except Exception:
+                pass
+        if isinstance(append, str):
+            try:
+                append = json.loads(append)
+            except Exception:
+                pass
+        if isinstance(remove_value, str):
+            try:
+                remove_value = json.loads(remove_value)
+            except Exception:
+                pass
+
+        data = await store.load()
+
+        if ops:
+            # Minimal JSON Patch support: add, replace, remove
+            if not isinstance(ops, list):
+                raise ValueError("ops must be a list of JSON patch operations")
+            for op in ops:
+                if not isinstance(op, dict):
+                    continue
+                operation = op.get("op")
+                path_str = op.get("path", "").lstrip("/").replace("/", ".")
+                if operation in ("add", "replace"):
+                    val = op.get("value")
+                    data = store._set_by_path(data, path_str, val)
+                elif operation == "remove":
+                    parts = path_str.split('.')
+                    cur: Any = data
+                    for p in parts[:-1]:
+                        if isinstance(cur, dict) and p in cur:
+                            cur = cur[p]
+                        else:
+                            cur = None
+                            break
+                    if isinstance(cur, dict):
+                        cur.pop(parts[-1], None)
+            await store.save(data)
+            return {"ok": True}
+
+        if dotted_path is not None:
+            if append is not None and remove_value is not None:
+                raise ValueError("Specify only one of append or remove_value")
+            if append is not None:
+                data = store._list_append(data, dotted_path, append)
+            elif remove_value is not None:
+                data = store._list_remove_value(data, dotted_path, remove_value)
+            else:
+                data = store._set_by_path(data, dotted_path, value)
+            await store.save(data)
+            return {"ok": True}
+
+        if patch is not None:
+            if not isinstance(patch, dict):
+                raise ValueError("patch must be an object")
+            merged = store._deep_merge(data or {}, patch)
+            await store.save(merged)
+            return {"ok": True}
+
+        raise ValueError("No valid update parameters provided")
 
     return impl
 
@@ -1524,7 +1716,6 @@ def make_query_household_preferences(project_root: Path, llm_client) -> Callable
         
         # Choose model and selection from config
         from config.loader import resolve_llm_selection
-        project_root = Path(__file__).resolve().parents[2]
         _, sel = resolve_llm_selection(project_root, "worker")
         model = sel.get("model", "gpt-5-nano")
         
