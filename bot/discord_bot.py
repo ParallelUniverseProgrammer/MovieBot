@@ -12,10 +12,13 @@ import discord
 from discord import app_commands
 
 from config.loader import load_settings, load_runtime_config
-from .commands.search import register as register_search
-from .commands.watchlist import register as register_watchlist
-from .commands.ratings import register as register_ratings
-from .commands.prefs import register as register_prefs
+from .commands import (
+    register_media,
+    register_discovery,
+    register_management,
+    register_preferences,
+    register_utilities
+)
 from .conversation import CONVERSATIONS
 from .agent import Agent
 
@@ -407,10 +410,11 @@ def build_client() -> MovieBotClient:
         await interaction.response.send_message("Pong!", ephemeral=True)
 
     # Register command groups
-    register_search(client)
-    register_watchlist(client)
-    register_ratings(client)
-    register_prefs(client)
+    register_media(client)
+    register_discovery(client)
+    register_management(client)
+    register_preferences(client)
+    register_utilities(client)
 
     @client.event
     async def on_ready() -> None:  # type: ignore[override]
