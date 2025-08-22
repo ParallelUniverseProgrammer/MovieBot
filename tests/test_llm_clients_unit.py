@@ -79,9 +79,9 @@ def test_llmclient_openai_sync_chat_reasoning_and_tools():
         mock_create.return_value = Mock()
         tools = [{"type": "function", "function": {"name": "t", "parameters": {}}}]
         c.chat(model="gpt-5-mini", messages=[{"role": "user", "content": "hi"}], tools=tools, reasoning="minimal")
-        # OpenAI path should include 'reasoning' param; tools should pass through
+        # OpenAI path should include 'reasoning_effort' param; tools should pass through
         args = mock_create.call_args.kwargs
-        assert "reasoning" in args and args["reasoning"] == {"effort": "minimal"}
+        assert args.get("reasoning_effort") == "minimal"
         assert args["tools"] == tools
 
 
@@ -98,7 +98,7 @@ async def test_llmclient_openai_async_chat_reasoning_and_tool_choice():
         )
         assert out == {"id": "x"}
         args = mock_acreate.call_args.kwargs
-        assert "reasoning" in args and args["reasoning"] == {"effort": "high"}
+        assert args.get("reasoning_effort") == "high"
         assert args["tool_choice"] == "required"
 
 

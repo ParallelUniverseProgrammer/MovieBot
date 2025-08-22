@@ -16,6 +16,8 @@ from integrations.plex_client import PlexClient, ResponseLevel
 from integrations.tmdb_client import TMDbClient, TMDbResponseLevel
 from integrations.radarr_client import RadarrClient
 from integrations.sonarr_client import SonarrClient
+import xml.etree.ElementTree as ET
+import httpx
 
 
 def make_search_plex(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
@@ -75,6 +77,141 @@ def make_search_plex(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
 
     return impl
 
+
+def _parse_plex_xml_videos(xml_text: str, response_level: ResponseLevel | None) -> List[Dict[str, Any]]:
+    root = ET.fromstring(xml_text)
+    items: List[Dict[str, Any]] = []
+    for v in root.findall('.//Video'):
+        title = v.get('title')
+        year = v.get('year')
+        rating_key = v.get('ratingKey')
+        media_type = v.get('type')
+        # Try to infer resolution/HDR from attributes across nodes
+        video_resolution = v.get('videoResolution')
+        has_hdr = False
+        # Inspect Media nodes for richer attributes
+        for m in v.findall('Media'):
+            if not video_resolution:
+                video_resolution = m.get('videoResolution') or m.get('videoResolution')
+            # Newer PMS exposes videoDynamicRange
+            vdr = (m.get('videoDynamicRange') or '').upper()
+            if vdr in {'HDR', 'DOLBY VISION', 'HLG'}:
+                has_hdr = True
+            # Some servers expose hdr=1/true
+            hdr_attr = (m.get('hdr') or '').lower()
+            if hdr_attr in {'1', 'true', 'yes'}:
+                has_hdr = True
+        item: Dict[str, Any] = {
+            'title': title,
+            'year': int(year) if year and year.isdigit() else None,
+            'ratingKey': int(rating_key) if rating_key and rating_key.isdigit() else rating_key,
+            'type': media_type,
+        }
+        if response_level in [ResponseLevel.STANDARD, ResponseLevel.DETAILED, None]:
+            item['videoResolution'] = video_resolution
+            item['hasHDR'] = has_hdr
+        items.append(item)
+    return items
+
+
+def make_get_plex_movies_4k_or_hdr(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    async def impl(args: dict) -> dict:
+        limit = int(args.get('limit', 30))
+        or_semantics = bool(args.get('or_semantics', True))
+        section_id = args.get('section_id')
+        response_level = ResponseLevel(args.get('response_level', 'compact')) if args.get('response_level') else None
+
+        settings = load_settings(project_root)
+        # Discover movie section id if not provided
+        if not section_id:
+            plex = PlexClient(settings.plex_base_url, settings.plex_token or '')
+            sections = plex.get_library_sections()
+            chosen = None
+            for _title, info in sections.items():
+                if info.get('type') == 'movie':
+                    chosen = info.get('section_id')
+                    break
+            if not chosen:
+                # Fallback to first section
+                if sections:
+                    chosen = next(iter(sections.values())).get('section_id')
+            if not chosen:
+                raise ValueError('No Plex library sections available')
+            section_id = str(chosen)
+        else:
+            section_id = str(section_id)
+
+        base_url = settings.plex_base_url.rstrip('/')
+        token = settings.plex_token or ''
+        if not token:
+            raise ValueError('PLEX_TOKEN is missing. Set it in your .env via the setup wizard.')
+
+        async def _fetch(params: Dict[str, Any]) -> List[Dict[str, Any]]:
+            qp: Dict[str, Any] = {
+                'X-Plex-Token': token,
+                'X-Plex-Container-Start': '0',
+                'X-Plex-Container-Size': str(limit),
+                'type': '1',  # movies
+            }
+            qp.update(params)
+            url = f"{base_url}/library/sections/{section_id}/all"
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.get(url, params=qp, headers={'Accept': 'application/xml'})
+                r.raise_for_status()
+                return _parse_plex_xml_videos(r.text, response_level)
+
+        attempts: List[Tuple[Dict[str, Any], int, Union[str, None]]] = []
+        items: List[Dict[str, Any]] = []
+
+        # Try OR variants first if requested
+        if or_semantics:
+            variants = [
+                {'or': '1', 'resolution': '4k', 'hdr': '1'},
+                {'or': '1', 'videoResolution': '4k', 'hdr': '1'},
+                {'or': '1', 'resolution': '4k', 'hdr': 'true'},
+                {'or': '1', 'videoResolution': '4k', 'hdr': 'true'},
+            ]
+            for p in variants:
+                try:
+                    res = await _fetch(p)
+                    attempts.append((p, len(res), None))
+                    if res:
+                        items = res
+                        break
+                except Exception as e:
+                    attempts.append((p, 0, str(e)))
+
+        # If still empty, union of separate queries
+        if not items:
+            unions: Dict[Any, Dict[str, Any]] = {}
+            fallbacks = [
+                {'resolution': '4k'},
+                {'videoResolution': '4k'},
+                {'hdr': '1'},
+                {'hdr': 'true'},
+            ]
+            for p in fallbacks:
+                try:
+                    res = await _fetch(p)
+                    attempts.append((p, len(res), None))
+                    for it in res:
+                        rk = it.get('ratingKey')
+                        unions[rk] = it
+                    if len(unions) >= limit:
+                        break
+                except Exception as e:
+                    attempts.append((p, 0, str(e)))
+            items = list(unions.values())[:limit]
+
+        return {
+            'items': items,
+            'total_found': len(items),
+            'section_id': section_id,
+            'attempts': attempts,
+            'response_level': response_level.value if response_level else 'compact'
+        }
+
+    return impl
 
 def _serialize_datetime(value):
     """Safely serialize datetime objects and other types to JSON-compatible format."""

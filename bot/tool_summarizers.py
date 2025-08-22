@@ -37,12 +37,16 @@ def summarize_tool_result(name: str, result: Dict[str, Any], *, max_items: int =
     # Plex families
     if name in {
         "search_plex", "get_plex_recently_added", "get_plex_on_deck", "get_plex_continue_watching",
-        "get_plex_unwatched", "get_plex_similar_items"
+        "get_plex_unwatched", "get_plex_similar_items", "get_plex_movies_4k_or_hdr"
     }:
         items = result.get("items") or []
         out["items"] = _summarize_items_list(items, ["title", "year", "rating", "ratingKey", "type"], max_items)
         if "total_found" in result:
             out["total_found"] = result.get("total_found")
+        if name == "get_plex_movies_4k_or_hdr":
+            # Keep useful debugging info minimal
+            attempts = result.get("attempts") or []
+            out["attempts"] = _truncate_list(attempts, 3)
         if "section_type" in result:
             out["section_type"] = result.get("section_type")
         return out

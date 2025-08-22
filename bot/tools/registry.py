@@ -7,6 +7,7 @@ import asyncio
 
 from .tool_impl import (
     make_search_plex,
+    make_get_plex_movies_4k_or_hdr,
     make_set_plex_rating,
     make_get_plex_library_sections,
     make_get_plex_recently_added,
@@ -156,6 +157,12 @@ def _define_openai_tools() -> List[Dict[str, Any]]:
                     "sort_order": {"type": ["string", "null"], "description": "Sort order (asc, desc)", "default": "asc"}
                 }
             }
+        }),
+        fn("get_plex_movies_4k_or_hdr", "List movies in Plex that are 4K or HDR (live HTTP query with OR fallbacks).", {
+            "limit": {"type": ["integer", "null"], "description": "Maximum results (default: 30)"},
+            "section_id": {"type": ["string", "integer", "null"], "description": "Plex library section id (auto-detected if omitted)"},
+            "or_semantics": {"type": ["boolean", "null"], "description": "Attempt OR filter in single request before fallbacks (default: true)"},
+            "response_level": {"type": ["string", "null"], "description": "Response detail level: minimal, compact, standard, detailed (default: compact)", "enum": ["minimal", "compact", "standard", "detailed"]}
         }),
         fn("set_plex_rating", "Set a rating (1-10) for a Plex item by ratingKey.", {
             "rating_key": {"type": "integer"},
@@ -572,6 +579,7 @@ def build_openai_tools_and_registry(project_root: Path, llm_client=None) -> Tupl
     tools = ToolRegistry()
     # Register implementations bound to this project root
     tools.register("search_plex", make_search_plex(project_root))
+    tools.register("get_plex_movies_4k_or_hdr", make_get_plex_movies_4k_or_hdr(project_root))
     tools.register("set_plex_rating", make_set_plex_rating(project_root))
     
     # Enhanced Plex tools

@@ -30,6 +30,7 @@ class TestRegistryLiveTools:
             ("get_plex_collections", {}),
             ("get_plex_playlists", {}),
             ("get_plex_playback_status", {}),
+            ("get_plex_movies_4k_or_hdr", {}),
         ]:
             tool = registry.get(name)
             out = await tool(args)

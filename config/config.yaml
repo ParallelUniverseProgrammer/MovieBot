@@ -13,7 +13,7 @@ llm:
     openai:
       chat:
         model: gpt-5-mini
-        reasoningEffort: minimal
+        reasoningEffort: low
       smart:
         model: gpt-5
         reasoningEffort: medium
@@ -21,14 +21,14 @@ llm:
         model: gpt-5-nano
         reasoningEffort: medium
       quick:
-        model: gpt-5
-        params:
-          max_tokens: 180
-      summarizer:
         model: gpt-5-nano
-        reasoningEffort: high
+        reasoningEffort: low
         params:
-          max_response_tokens: 200
+          max_response_tokens: 180
+      summarizer:
+        model: gpt-4o-mini
+        params:
+          max_tokens: 200
     openrouter:
       chat: z-ai/glm-4.5-air:free
       smart: z-ai/glm-4.5-air:free
