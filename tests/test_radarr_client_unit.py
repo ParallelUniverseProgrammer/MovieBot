@@ -163,15 +163,15 @@ async def test_history_params_and_blacklist_operations():
         # blacklist list
         client.get.return_value = list_resp
         _ = await rc.get_blacklist(page=3, page_size=50)
-        client.get.assert_called_with("/api/v3/blacklist", params={"page": 3, "pageSize": 50})
+        client.get.assert_called_with("/api/v3/blocklist", params={"page": 3, "pageSize": 50})
 
         # delete item
         await rc.delete_blacklist_item(99)
-        client.delete.assert_called_with("/api/v3/blacklist/99")
+        client.delete.assert_called_with("/api/v3/blocklist/99")
 
         # clear all
         await rc.clear_blacklist()
-        client.delete.assert_called_with("/api/v3/blacklist")
+        client.delete.assert_called_with("/api/v3/blocklist")
 
 
 @pytest.mark.asyncio

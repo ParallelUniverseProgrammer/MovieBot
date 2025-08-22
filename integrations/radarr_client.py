@@ -252,18 +252,18 @@ class RadarrClient:
     async def get_blacklist(self, page: int = 1, page_size: int = 20) -> Dict[str, Any]:
         params = {"page": page, "pageSize": page_size}
         async with self._new_client() as client:
-            r = await client.get("/api/v3/blacklist", params=params)
+            r = await client.get("/api/v3/blocklist", params=params)
             r.raise_for_status()
             return r.json()
 
     async def delete_blacklist_item(self, blacklist_id: int) -> None:
         async with self._new_client() as client:
-            r = await client.delete(f"/api/v3/blacklist/{blacklist_id}")
+            r = await client.delete(f"/api/v3/blocklist/{blacklist_id}")
             r.raise_for_status()
 
     async def clear_blacklist(self) -> None:
         async with self._new_client() as client:
-            r = await client.delete("/api/v3/blacklist")
+            r = await client.delete("/api/v3/blocklist")
             r.raise_for_status()
 
     # Indexers
