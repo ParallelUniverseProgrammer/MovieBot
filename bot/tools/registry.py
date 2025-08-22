@@ -85,6 +85,7 @@ from .tool_impl import (
     make_sonarr_monitor_season,
     make_sonarr_monitor_episodes_by_season,
     make_sonarr_search_season,
+    make_sonarr_search_episode,
     make_sonarr_search_episodes,
     make_sonarr_get_series_summary,
     make_sonarr_get_season_summary,
@@ -475,6 +476,9 @@ def _define_openai_tools() -> List[Dict[str, Any]]:
             "series_id": {"type": "integer", "description": "Series ID"},
             "season_number": {"type": "integer", "description": "Season number to search"}
         }),
+        fn("sonarr_search_episode", "Search for a specific episode by ID.", {
+            "episode_id": {"type": "integer", "description": "Episode ID"}
+        }),
         fn("sonarr_search_episodes", "Search for multiple specific episodes by ID.", {
             "episode_ids": {"type": "array", "items": {"type": "integer"}, "description": "List of episode IDs to search for"}
         }),
@@ -614,6 +618,7 @@ def build_openai_tools_and_registry(project_root: Path, llm_client=None) -> Tupl
     tools.register("sonarr_monitor_season", make_sonarr_monitor_season(project_root))
     tools.register("sonarr_monitor_episodes_by_season", make_sonarr_monitor_episodes_by_season(project_root))
     tools.register("sonarr_search_season", make_sonarr_search_season(project_root))
+    tools.register("sonarr_search_episode", make_sonarr_search_episode(project_root))
     tools.register("sonarr_search_episodes", make_sonarr_search_episodes(project_root))
     tools.register("sonarr_get_series_summary", make_sonarr_get_series_summary(project_root))
     tools.register("sonarr_get_season_summary", make_sonarr_get_season_summary(project_root))

@@ -22,6 +22,22 @@ class SubAgent:
         self.openai_tools, self.tool_registry = build_openai_tools_and_registry(project_root, self.llm)
         self.project_root = project_root
         self.log = logging.getLogger("moviebot.sub_agent")
+        
+        # Use the same provider selection logic as the main agent
+        from config.loader import load_settings
+        settings = load_settings(project_root)
+        
+        # Choose provider: OpenRouter if available, otherwise OpenAI (same logic as main agent)
+        if settings.openai_api_key:
+            self.api_key = settings.openai_api_key
+            self.provider = "openai"
+        else:
+            self.api_key = settings.openrouter_api_key or ""
+            self.provider = "openrouter"
+        
+        # Recreate LLM client with correct provider
+        self.llm = LLMClient(self.api_key, provider=self.provider)
+        self.openai_tools, self.tool_registry = build_openai_tools_and_registry(project_root, self.llm)
 
     def _chat_once(self, messages: List[Dict[str, Any]], model: str) -> Any:
         """Single chat interaction with the LLM."""
@@ -63,24 +79,37 @@ class SubAgent:
         Returns:
             Dict with search results and status
         """
+        self.log.info(f"Starting episode fallback search for {series_title} S{season_number}, episodes: {target_episodes}")
+        
         system_prompt = f"""You are a focused TV episode search agent. Your task is to search for individual episodes when season packs fail.
 
 Series: {series_title} (ID: {series_id})
 Season: {season_number}
 Target Episodes: {', '.join(map(str, target_episodes))}
 
-Your mission:
-1. Search for each target episode individually using sonarr_search_episode
-2. Monitor only the episodes that were successfully found
-3. Provide a clear summary of what was found and what wasn't
-4. Be efficient - use minimal context and focus only on this task
+CRITICAL REQUIREMENTS:
+1. You MUST search for ALL {len(target_episodes)} episodes listed above
+2. Do NOT skip any episodes - search for each and every one
+3. Use sonarr_get_episodes first to get episode IDs for the series
+4. Then use sonarr_search_episode to search for each episode individually (more reliable than batch search)
+5. Monitor only the episodes that were successfully found
+6. Provide a detailed summary showing which episodes were found and which weren't
+7. If you can't find all episodes, explain why and what you tried
 
-Available tools: sonarr_search_episode, sonarr_monitor_episodes, sonarr_get_episodes
+WORKFLOW:
+1. Call sonarr_get_episodes with series_id to get all episodes
+2. Filter episodes by season_number to get the target season episodes
+3. For each episode in the target episodes list, call sonarr_search_episode with the episode ID
+4. After all searches complete, provide a summary of results
+
+Available tools: sonarr_search_episodes, sonarr_search_episode, sonarr_monitor_episodes, sonarr_get_episodes
+
+Remember: Search for ALL episodes, not just some of them!
 """
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Search for episodes {', '.join(map(str, target_episodes))} from {series_title} Season {season_number} and monitor the ones you find."}
+            {"role": "user", "content": f"Follow this exact workflow to search for ALL {len(target_episodes)} episodes from {series_title} Season {season_number}:\n\n1. First get all episodes using sonarr_get_episodes with series_id {series_id}\n2. Then search for each episode individually using sonarr_search_episode with the episode ID\n3. Do NOT skip any episodes - search for each one\n4. Provide a detailed summary of what was found\n\nTarget episodes: {', '.join(map(str, target_episodes))}"}
         ]
 
         # Use a lightweight model for efficiency
@@ -97,6 +126,7 @@ Available tools: sonarr_search_episode, sonarr_monitor_episodes, sonarr_get_epis
             tool_calls = getattr(response.choices[0].message, "tool_calls", None)
             
             if tool_calls:
+                self.log.info(f"Sub-agent executing {len(tool_calls)} tool calls for episode search")
                 # Execute tool calls
                 results = await self._execute_tool_calls(tool_calls)
                 
@@ -116,20 +146,29 @@ Available tools: sonarr_search_episode, sonarr_monitor_episodes, sonarr_get_epis
                 ]
                 
                 final_response = self._chat_once(final_messages, model)
+                final_content = final_response.choices[0].message.content or ""
+                
+                self.log.info(f"Episode fallback search completed. Final response: {final_content[:200]}...")
+                
                 return {
                     "success": True,
-                    "content": final_response.choices[0].message.content,
+                    "content": final_content,
                     "episodes_searched": target_episodes,
+                    "episodes_requested": len(target_episodes),
                     "series_id": series_id,
-                    "season_number": season_number
+                    "season_number": season_number,
+                    "tool_calls_executed": len(tool_calls)
                 }
             else:
+                self.log.warning(f"No tool calls made by sub-agent for episode search")
                 return {
                     "success": True,
                     "content": content,
                     "episodes_searched": target_episodes,
+                    "episodes_requested": len(target_episodes),
                     "series_id": series_id,
-                    "season_number": season_number
+                    "season_number": season_number,
+                    "warning": "No tool calls made - episodes may not have been searched"
                 }
                 
         except Exception as e:
@@ -138,6 +177,7 @@ Available tools: sonarr_search_episode, sonarr_monitor_episodes, sonarr_get_epis
                 "success": False,
                 "error": str(e),
                 "episodes_searched": target_episodes,
+                "episodes_requested": len(target_episodes),
                 "series_id": series_id,
                 "season_number": season_number
             }
@@ -151,17 +191,27 @@ Available tools: sonarr_search_episode, sonarr_monitor_episodes, sonarr_get_epis
                 name = tool_call.function.name
                 args_json = tool_call.function.arguments or "{}"
                 
+                self.log.info(f"Sub-agent executing tool: {name} with args: {args_json}")
+                
                 # Parse args
                 try:
                     args = json.loads(args_json)
                 except json.JSONDecodeError as e:
                     result = {"ok": False, "error": "invalid_json", "details": str(e)}
                     results.append(result)
+                    self.log.error(f"JSON decode error in tool {name}: {e}")
                     continue
 
                 # Execute tool
                 tool_func = self.tool_registry.get(name)
+                if not tool_func:
+                    result = {"ok": False, "error": f"Tool {name} not found in registry"}
+                    self.log.error(f"Tool {name} not found in registry")
+                    results.append(result)
+                    continue
+                
                 result = await tool_func(args)
+                self.log.info(f"Tool {name} completed with result: {str(result)[:200]}...")
                 results.append(result)
                 
             except Exception as e:

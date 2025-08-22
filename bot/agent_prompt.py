@@ -188,6 +188,7 @@ AGENT_SYSTEM_PROMPT: str = build_system_prompt(
         "sonarr_monitor_season": "Monitor or unmonitor entire season at once",
         "sonarr_monitor_episodes_by_season": "Monitor all episodes in specific season",
         "sonarr_search_season": "Search for all episodes in specific season",
+        "sonarr_search_episode": "Search for a specific episode by ID",
         "sonarr_search_episodes": "Search for multiple specific episodes by ID",
         "sonarr_get_series_summary": "Get concise series status summary for efficient context usage",
         "sonarr_get_season_summary": "Get concise season status summary for efficient context usage",

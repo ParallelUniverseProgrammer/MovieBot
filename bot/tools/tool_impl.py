@@ -948,11 +948,16 @@ def make_sonarr_episode_fallback_search(project_root: Path) -> Callable[[dict], 
         settings = load_settings(project_root)
         config = load_runtime_config(project_root)
         
-        # Create sub-agent for focused episode search
+        # Get provider from main agent context or fall back to config
+        # The main agent should pass this information when calling the tool
+        provider = args.get("provider") or config.get("llm", {}).get("provider", "openai")
+        api_key = args.get("api_key") or settings.openai_api_key or config.get("llm", {}).get("apiKey", "")
+        
+        # Create sub-agent for focused episode search with correct provider settings
         sub_agent = SubAgent(
-            api_key=settings.openai_api_key or config.get("llm", {}).get("apiKey", ""),
+            api_key=api_key,
             project_root=project_root,
-            provider=config.get("llm", {}).get("provider", "openai")
+            provider=provider
         )
         
         try:
@@ -980,11 +985,16 @@ def make_sonarr_quality_fallback(project_root: Path) -> Callable[[dict], Awaitab
         settings = load_settings(project_root)
         config = load_runtime_config(project_root)
         
-        # Create sub-agent for quality management
+        # Get provider from main agent context or fall back to config
+        # The main agent should pass this information when calling the tool
+        provider = args.get("provider") or config.get("llm", {}).get("provider", "openai")
+        api_key = args.get("api_key") or settings.openai_api_key or config.get("llm", {}).get("apiKey", "")
+        
+        # Create sub-agent for quality management with correct provider settings
         sub_agent = SubAgent(
-            api_key=settings.openai_api_key or config.get("llm", {}).get("apiKey", ""),
+            api_key=api_key,
             project_root=project_root,
-            provider=config.get("llm", {}).get("provider", "openai")
+            provider=provider
         )
         
         try:
@@ -1761,6 +1771,28 @@ def make_get_plex_item_details(project_root: Path) -> Callable[[dict], Awaitable
             }
         else:
             return {"error": "Item not found", "rating_key": rating_key}
+
+    return impl
+
+
+def make_sonarr_search_episode(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    async def impl(args: dict) -> dict:
+        episode_id = int(args["episode_id"])
+        settings = load_settings(project_root)
+        sonarr = SonarrClient(settings.sonarr_base_url, settings.sonarr_api_key or "")
+        data = await sonarr.search_episode(episode_id)
+        await sonarr.close()
+        return {"episode_search_command": data}
+
+
+def make_sonarr_search_episodes(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    async def impl(args: dict) -> dict:
+        episode_ids = [int(id) for id in args["episode_ids"]]
+        settings = load_settings(project_root)
+        sonarr = SonarrClient(settings.sonarr_base_url, settings.sonarr_api_key or "")
+        data = await sonarr.search_episodes(episode_ids)
+        await sonarr.close()
+        return {"episodes_search_command": data}
 
     return impl
 
