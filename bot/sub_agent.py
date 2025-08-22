@@ -65,6 +65,32 @@ class SubAgent:
         })
         return resp
 
+    async def _achat_once(self, messages: List[Dict[str, Any]], model: str) -> Any:
+        """Async version of _chat_once for non-blocking LLM calls."""
+        self.log.debug("SubAgent LLM.achat start", extra={
+            "model": model,
+            "message_count": len(messages),
+        })
+        
+        resp = await self.llm.achat(
+            model=model,
+            messages=messages,
+            tools=self.openai_tools,
+            tool_choice="auto",
+            temperature=0.7,  # Lower temperature for more focused responses
+        )
+
+        try:
+            content_preview = (resp.choices[0].message.content or "")[:100]
+        except Exception:
+            content_preview = "<no content>"
+            
+        self.log.debug("SubAgent LLM.achat done", extra={
+            "tool_calls": bool(getattr(getattr(resp.choices[0], 'message', {}), 'tool_calls', None)),
+            "content_preview": content_preview,
+        })
+        return resp
+
     async def handle_episode_fallback_search(self, series_id: int, season_number: int, 
                                            series_title: str, target_episodes: List[int]) -> Dict[str, Any]:
         """

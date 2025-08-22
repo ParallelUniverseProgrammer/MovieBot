@@ -331,7 +331,7 @@ class MovieBotClient(discord.Client):
                 progress_update_task = asyncio.create_task(progress_updater())
                 
                 try:
-                    response = await loop.run_in_executor(None, lambda: agent.converse(history))
+                    response = await agent.aconverse(history)
                 finally:
                     done.set()
                     if progress_update_task:

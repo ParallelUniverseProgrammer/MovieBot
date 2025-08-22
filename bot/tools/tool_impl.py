@@ -1552,8 +1552,8 @@ def make_query_household_preferences(project_root: Path, llm_client) -> Callable
         }
         
         try:
-            # Call the synchronous LLM client
-            response = llm_client.chat(
+            # Call the async LLM client
+            response = await llm_client.achat(
                 model=model,
                 messages=[system_message, user_message],
                 temperature=1,   # Limit to ensure single sentence
