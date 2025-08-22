@@ -11,39 +11,42 @@ llm:
   providers:
     priority: [openai, openrouter]
     openai:
-      chat: gpt-5-mini
-      smart: gpt-5
-      worker: gpt-5-nano
+      chat:
+        model: gpt-5-mini
+        reasoningEffort: minimal
+      smart:
+        model: gpt-5
+        reasoningEffort: medium
+      worker:
+        model: gpt-5-nano
+        reasoningEffort: medium
       quick:
         model: gpt-5
         params:
           max_tokens: 180
-          temperature: 0.7
-          top_p: 1
       summarizer:
         model: gpt-5-nano
+        reasoningEffort: high
         params:
           max_response_tokens: 200
-          temperature: 0
-          top_p: 1
     openrouter:
       chat: z-ai/glm-4.5-air:free
       smart: z-ai/glm-4.5-air:free
       worker: z-ai/glm-4.5-air:free
 tools:
-  timeoutMs: 5000
-  parallelism: 8
+  timeoutMs: 2500
+  parallelism: 10
   retryMax: 1
   backoffBaseMs: 80
-  listMaxItems: 5
+  listMaxItems: 8
 ux:
   progressThresholdMs: 2500
   progressUpdateIntervalMs: 6000
   progressUpdateFrequency: 3
 http:
   connectTimeoutMs: 1500
-  readTimeoutMs: 7000
-  totalTimeoutMs: 10000
+  readTimeoutMs: 2000
+  totalTimeoutMs: 5000
   maxConnections: 128
   retryMax: 1
   backoffBaseMs: 80

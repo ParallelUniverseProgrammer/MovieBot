@@ -69,12 +69,19 @@ class OpenRouterClient:
         return total_tokens
 
     def _normalize_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize parameter names for Chat Completions compatibility."""
+        """Normalize parameter names for Chat Completions compatibility.
+
+        - If any alternate token keys are provided, convert the first one to
+          max_tokens when max_tokens is not already present.
+        - Always remove alternate keys to avoid sending duplicate/conflicting params.
+        """
         out = dict(params)
-        # Map various token limit keys to max_tokens for chat.completions
         for k in ("max_response_tokens", "max_output_tokens", "max_completion_tokens"):
-            if k in out and "max_tokens" not in out:
-                out["max_tokens"] = out.pop(k)
+            if k in out:
+                if "max_tokens" not in out:
+                    out["max_tokens"] = out[k]
+                # remove the alternate key regardless to prevent duplicates
+                out.pop(k, None)
         return out
 
     def chat(self, *, model: str, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, reasoning: Optional[str] = None, tool_choice: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
@@ -158,11 +165,16 @@ class LLMClient:
         return total_tokens
 
     def _normalize_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize parameter names for Chat Completions compatibility."""
+        """Normalize parameter names for Chat Completions compatibility.
+
+        See OpenRouterClient._normalize_params for behavior; we mirror it here.
+        """
         out = dict(params)
         for k in ("max_response_tokens", "max_output_tokens", "max_completion_tokens"):
-            if k in out and "max_tokens" not in out:
-                out["max_tokens"] = out.pop(k)
+            if k in out:
+                if "max_tokens" not in out:
+                    out["max_tokens"] = out[k]
+                out.pop(k, None)
         return out
 
     def chat(self, *, model: str, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, reasoning: Optional[str] = None, tool_choice: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
