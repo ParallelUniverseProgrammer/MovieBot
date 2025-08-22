@@ -14,7 +14,9 @@ tools:
   retryMax: 2
   backoffBaseMs: 200
 ux:
-  progressThresholdMs: 5000
+  progressThresholdMs: 2000
+  progressUpdateIntervalMs: 2000
+  progressUpdateFrequency: 4
 http:
   connectTimeoutMs: 3000
   readTimeoutMs: 10000

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Callable, Optional
 from pathlib import Path
 import json
 import asyncio
@@ -15,11 +15,12 @@ from config.loader import load_runtime_config
 
 
 class Agent:
-    def __init__(self, *, api_key: str, project_root: Path, provider: str = "openai"):
+    def __init__(self, *, api_key: str, project_root: Path, provider: str = "openai", progress_callback: Optional[Callable[[str, str], None]] = None):
         self.llm = LLMClient(api_key, provider=provider)
         self.openai_tools, self.tool_registry = build_openai_tools_and_registry(project_root, self.llm)
         self.project_root = project_root
         self.log = logging.getLogger("moviebot.agent")
+        self.progress_callback = progress_callback
 
     def _chat_once(self, messages: List[Dict[str, Any]], model: str) -> Any:
         self.log.debug("LLM.chat start", extra={
@@ -77,6 +78,14 @@ class Agent:
         last_response: Any = None
         for iter_idx in range(iters):
             self.log.info(f"agent iteration {iter_idx+1}/{iters}")
+            
+            # Notify progress callback about LLM thinking
+            if self.progress_callback:
+                try:
+                    self.progress_callback("thinking", f"iteration {iter_idx+1}/{iters}")
+                except Exception:
+                    pass  # Don't let progress updates break the main flow
+            
             last_response = self._chat_once(messages, model)
             choice = last_response.choices[0]
             msg = choice.message
@@ -109,6 +118,14 @@ class Agent:
                 args_json = tc.function.arguments or "{}"
                 self.log.info(f"tool call requested: {name}")
                 self.log.debug("tool args", extra={"name": name, "args": args_json})
+                
+                # Notify progress callback about tool execution
+                if self.progress_callback:
+                    try:
+                        self.progress_callback("tool", name)
+                    except Exception:
+                        pass
+                
                 # Parse args
                 try:
                     args = json.loads(args_json)
