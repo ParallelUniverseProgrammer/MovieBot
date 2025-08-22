@@ -98,6 +98,7 @@ from .tool_impl import (
     make_update_household_preferences,
     make_query_household_preferences,
 )
+from .result_cache import make_fetch_cached_result
 
 
 ToolCallable = Callable[[dict], Awaitable[dict]]
@@ -129,6 +130,12 @@ def _define_openai_tools() -> List[Dict[str, Any]]:
         }
 
     return [
+        fn("fetch_cached_result", "Fetch a previously cached tool result by ref id with optional field projection and slicing.", {
+            "ref_id": {"type": "string"},
+            "fields": {"type": ["array", "null"], "items": {"type": "string"}},
+            "start": {"type": ["integer", "null"]},
+            "count": {"type": ["integer", "null"]}
+        }),
         fn("search_plex", "Search Plex library by title with advanced filtering options.", {
             "query": {"type": ["string", "null"], "description": "Search query (optional - if not provided, returns all movies)"},
             "limit": {"type": ["integer", "null"], "description": "Maximum number of results to return (default: 20)"},
@@ -520,9 +527,39 @@ def _define_openai_tools() -> List[Dict[str, Any]]:
         fn("update_household_preferences", "Update preferences via deep-merge patch, path set, list ops, or JSON Patch.", {
             "patch": {"type": ["object", "null"], "description": "Object to deep-merge into preferences"},
             "path": {"type": ["string", "null"], "description": "Dotted path for targeted update (e.g., 'likes.genres')"},
-            "value": {"type": ["string", "number", "boolean", "object", "array", "null"], "description": "Value to set when using path"},
-            "append": {"type": ["string", "number", "boolean", "object", "array", "null"], "description": "Append value to list at path (creates list if missing)"},
-            "remove_value": {"type": ["string", "number", "boolean", "object", "array", "null"], "description": "Remove value from list at path (no-op if not present)"},
+            "value": {
+                "description": "Value to set when using path",
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "number"},
+                    {"type": "boolean"},
+                    {"type": "object"},
+                    {"type": "array", "items": {}},
+                    {"type": "null"}
+                ]
+            },
+            "append": {
+                "description": "Append value to list at path (creates list if missing)",
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "number"},
+                    {"type": "boolean"},
+                    {"type": "object"},
+                    {"type": "array", "items": {}},
+                    {"type": "null"}
+                ]
+            },
+            "remove_value": {
+                "description": "Remove value from list at path (no-op if not present)",
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "number"},
+                    {"type": "boolean"},
+                    {"type": "object"},
+                    {"type": "array", "items": {}},
+                    {"type": "null"}
+                ]
+            },
             "ops": {"type": ["array", "null"], "items": {"type": "object"}, "description": "JSON Patch operations: add/replace/remove with /path"}
         }),
         fn("query_household_preferences", "Query household preferences using GPT-5 and get a concise one-sentence answer.", {
@@ -637,6 +674,8 @@ def build_openai_tools_and_registry(project_root: Path, llm_client=None) -> Tupl
     tools.register("update_household_preferences", make_update_household_preferences(project_root))
     if llm_client:
         tools.register("query_household_preferences", make_query_household_preferences(project_root, llm_client))
+    # Utility: fetch cached results
+    tools.register("fetch_cached_result", make_fetch_cached_result(project_root))
 
     openai_tools = _define_openai_tools()
     return openai_tools, tools

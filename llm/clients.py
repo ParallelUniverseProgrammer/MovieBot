@@ -55,6 +55,15 @@ class OpenRouterClient:
         
         return total_tokens
 
+    def _normalize_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize parameter names for Chat Completions compatibility."""
+        out = dict(params)
+        # Map various token limit keys to max_tokens for chat.completions
+        for k in ("max_response_tokens", "max_output_tokens", "max_completion_tokens"):
+            if k in out and "max_tokens" not in out:
+                out["max_tokens"] = out.pop(k)
+        return out
+
     def chat(self, *, model: str, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, reasoning: Optional[str] = None, tool_choice: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
         params: Dict[str, Any] = {"model": model, "messages": messages}
         if tools is not None:
@@ -63,7 +72,8 @@ class OpenRouterClient:
             params["reasoning"] = {"effort": reasoning}
         if tool_choice is not None:
             params["tool_choice"] = tool_choice
-        
+        # Normalize any provided kwargs
+        kwargs = self._normalize_params(kwargs)
         # Add OpenRouter-specific headers for tracking
         extra_headers = {
             "HTTP-Referer": "https://github.com/your-repo/moviebot",  # Optional: for rankings
@@ -83,7 +93,8 @@ class OpenRouterClient:
             params["reasoning"] = {"effort": reasoning}
         if tool_choice is not None:
             params["tool_choice"] = tool_choice
-        
+        # Normalize any provided kwargs
+        kwargs = self._normalize_params(kwargs)
         # Add OpenRouter-specific headers for tracking
         extra_headers = {
             "HTTP-Referer": "https://github.com/your-repo/moviebot",  # Optional: for rankings
@@ -132,6 +143,14 @@ class LLMClient:
         
         return total_tokens
 
+    def _normalize_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize parameter names for Chat Completions compatibility."""
+        out = dict(params)
+        for k in ("max_response_tokens", "max_output_tokens", "max_completion_tokens"):
+            if k in out and "max_tokens" not in out:
+                out["max_tokens"] = out.pop(k)
+        return out
+
     def chat(self, *, model: str, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, reasoning: Optional[str] = None, tool_choice: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
         # Force minimal reasoning for gpt-5-mini unless overridden
         if model == "gpt-5-mini" and (reasoning is None or reasoning == ""):
@@ -146,7 +165,7 @@ class LLMClient:
                 tools=tools,
                 reasoning=reasoning,
                 tool_choice=tool_choice,
-                **kwargs
+                **self._normalize_params(kwargs)
             )
         else:
             # OpenAI client
@@ -157,7 +176,7 @@ class LLMClient:
                 params["reasoning"] = {"effort": reasoning}
             if tool_choice is not None:
                 params["tool_choice"] = tool_choice
-            params.update(kwargs)
+            params.update(self._normalize_params(kwargs))
             return self.client.chat.completions.create(**params)  # type: ignore[no-any-return]
 
     async def achat(self, *, model: str, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, reasoning: Optional[str] = None, tool_choice: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
@@ -175,7 +194,7 @@ class LLMClient:
                 tools=tools,
                 reasoning=reasoning,
                 tool_choice=tool_choice,
-                **kwargs
+                **self._normalize_params(kwargs)
             )
         else:
             # OpenAI async client
@@ -186,7 +205,7 @@ class LLMClient:
                 params["reasoning"] = {"effort": reasoning}
             if tool_choice is not None:
                 params["tool_choice"] = tool_choice
-            params.update(kwargs)
+            params.update(self._normalize_params(kwargs))
             return await self.async_client.chat.completions.create(**params)  # type: ignore[no-any-return]
 
 

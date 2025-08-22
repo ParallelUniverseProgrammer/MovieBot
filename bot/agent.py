@@ -13,6 +13,8 @@ from .tools.registry import build_openai_tools_and_registry
 from .tools.tool_impl import build_preferences_context  # reuse the same formatter
 from config.loader import load_runtime_config
 from config.loader import resolve_llm_provider_and_model
+from .tool_summarizers import summarize_tool_result
+from .tools.result_cache import put_tool_result
 
 
 class Agent:
@@ -200,12 +202,29 @@ class Agent:
                     flattened_results.extend(result)
                 else:
                     flattened_results.append(result)
+            # Determine max items to keep in summaries and cache TTL
+            list_max_items = int(rc.get("tools", {}).get("listMaxItems", 5))
+            cache_ttl_sec = int(rc.get("cache", {}).get("ttlShortSec", 60))
             for tool_call_id, name, result, attempts, cache_hit in flattened_results:
+                # Store raw result and attach ref_id for on-demand detail fetching
+                ref_id = None
+                try:
+                    ref_id = put_tool_result(result, cache_ttl_sec)
+                except Exception:
+                    ref_id = None
+
+                # Summarize and minify tool output before appending
+                try:
+                    summarized = summarize_tool_result(name, result, max_items=list_max_items)
+                except Exception:
+                    summarized = result
+
+                payload = {"ref_id": ref_id, "summary": summarized}
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
                     "name": name,
-                    "content": json.dumps(result),
+                    "content": json.dumps(payload, separators=(",", ":")),
                 })
             # Finalization turn after tools: ask model to produce a user-facing reply
             final_resp = await self._achat_once(messages, model, role)
@@ -460,12 +479,26 @@ class Agent:
                 else:
                     flattened_results.append(result)
             
+            # Determine max items to keep in summaries and cache TTL
+            list_max_items = int(rc.get("tools", {}).get("listMaxItems", 5))
+            cache_ttl_sec = int(rc.get("cache", {}).get("ttlShortSec", 60))
             for tool_call_id, name, result, attempts, cache_hit in flattened_results:
+                ref_id = None
+                try:
+                    ref_id = put_tool_result(result, cache_ttl_sec)
+                except Exception:
+                    ref_id = None
+
+                try:
+                    summarized = summarize_tool_result(name, result, max_items=list_max_items)
+                except Exception:
+                    summarized = result
+                payload = {"ref_id": ref_id, "summary": summarized}
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
                     "name": name,
-                    "content": json.dumps(result),
+                    "content": json.dumps(payload, separators=(",", ":")),
                 })
             # Finalization turn after tools: ask model to produce a user-facing reply
             final_resp = await self._achat_once(messages, model, role)

@@ -21,6 +21,7 @@ from .commands import (
 )
 from .conversation import CONVERSATIONS
 from .agent import Agent
+from .agent_prompt import build_minimal_system_prompt
 
 
 def ephemeral_embed(title: str, description: str) -> discord.Embed:
@@ -279,6 +280,40 @@ class MovieBotClient(discord.Client):
             "content_preview": content[:120],
         })
 
+        # Lightweight quick-path: respond directly with a small model if tools likely unnecessary
+        def _is_quick_path(s: str) -> bool:
+            s_lo = s.strip().lower()
+            if not s_lo:
+                return False
+            # Greetings / pleasantries / capability queries / style-only asks
+            quick_keywords = [
+                "hi", "hello", "hey", "how are you", "what can you do", "help", "capabilities",
+                "who are you", "what is moviebot", "explain yourself", "about you", "commands",
+                "format", "how to use", "usage", "examples", "tips", "thanks", "thank you"
+            ]
+            if any(k in s_lo for k in quick_keywords):
+                return True
+            # Short questions without actionable nouns often don't need tools
+            return len(s_lo) <= 48 and s_lo.endswith(("?", "."))
+
+        # Quick-path answer function using the 'quick' role
+        async def _maybe_quick_path_response(text: str) -> str | None:
+            if not _is_quick_path(text):
+                return None
+            from config.loader import resolve_llm_selection
+            provider, sel = resolve_llm_selection(self.project_root, "quick")  # type: ignore[attr-type]
+            api_key = settings.openai_api_key if provider == "openai" else (settings.openrouter_api_key or "")
+            # Minimal prompt, no tools
+            system_msg = {"role": "system", "content": build_minimal_system_prompt()}
+            user_msg = {"role": "user", "content": text}
+            llm = Agent(api_key=api_key, project_root=self.project_root, provider=provider).llm  # type: ignore[arg-type]
+            try:
+                resp = await llm.achat(model=sel.get("model", "gpt-5"), messages=[system_msg, user_msg], **(sel.get("params", {}) or {}))
+                content = resp.choices[0].message.content  # type: ignore[attr-defined]
+                return content or ""
+            except Exception:
+                return None
+
         # Run blocking LLM call in a thread to avoid blocking the event loop
         loop = asyncio.get_running_loop()
         history = CONVERSATIONS.tail(conv_id)
@@ -354,9 +389,22 @@ class MovieBotClient(discord.Client):
                             log.warning(f"Failed to send progress message: {e}")
 
                 progress_update_task = asyncio.create_task(progress_updater())
-                
+
                 try:
-                    response = await agent.aconverse(history)
+                    # Try quick-path first
+                    quick_text = await _maybe_quick_path_response(content)
+                    if quick_text is not None and quick_text.strip():
+                        response = {"choices": [{"message": {"content": quick_text}}]}
+                    else:
+                        try:
+                            response = await agent.aconverse(history)
+                        except Exception:
+                            # As a last resort, try quick-path even if heuristic failed initially
+                            fallback_text = await _maybe_quick_path_response(content)
+                            if fallback_text:
+                                response = {"choices": [{"message": {"content": fallback_text}}]}
+                            else:
+                                raise
                 finally:
                     done.set()
                     if progress_update_task:
