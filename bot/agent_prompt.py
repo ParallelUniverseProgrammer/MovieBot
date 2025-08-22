@@ -19,7 +19,13 @@ def build_minimal_system_prompt() -> str:
         " except for destructive actions. Keep replies under 750 characters, format titles as **Title (Year)**,"
         " and use code-style availability tags like `[Plex]`, `[Add via Radarr]`, `[Add via Sonarr]`."
         "\n\nEfficiency: Use minimal/compact tool response levels by default; request details only when necessary."
+        " When applying filters (year/genres/people/rating), set response_level='standard' so filters work."
         " Always verify via tools; never guess IDs or availability."
+        "\n\nTime & collections heuristics: Interpret colloquial decades as year ranges: '70s'→1970–1979,"
+        " '80s'→1980–1989, '90s'→1990–1999, '2000s'→2000–2009, '2010s'→2010–2019."
+        " 'early' decade ≈ first half; 'late' ≈ second half."
+        " If a requested 'collection' name doesn't exist in Plex collections, treat it as a dynamic filter"
+        " over the library (e.g., '90s movies' ⇒ year_min=1990, year_max=1999) using search_plex."
     )
 
 
