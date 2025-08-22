@@ -104,9 +104,22 @@ class SonarrClient:
             root_folder_path=root_folder_path
         )
         
+        # Get series title from TVDB ID lookup
+        lookup_results = await self.lookup(str(tvdb_id))
+        if not lookup_results:
+            raise ValueError(f"TVDB ID {tvdb_id} not found in Sonarr lookup")
+        
+        series_info = lookup_results[0]
+        series_title = series_info.get("title")
+        if not series_title:
+            raise ValueError(f"Series title not found for TVDB ID {tvdb_id}")
+        
         # Build the payload with all required fields for Sonarr v3 API
         payload = {
             "tvdbId": tvdb_id,
+            "title": series_title,  # Required field that was missing
+            "titleSlug": series_info.get("titleSlug", ""),  # Required for Sonarr
+            "overview": series_info.get("overview", ""),  # Required for Sonarr
             "qualityProfileId": quality_profile_id,
             "rootFolderPath": root_folder_path,
             "monitored": monitored,
