@@ -133,6 +133,9 @@ class LLMClient:
         return total_tokens
 
     def chat(self, *, model: str, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, reasoning: Optional[str] = None, tool_choice: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
+        # Force minimal reasoning for gpt-5-mini unless overridden
+        if model == "gpt-5-mini" and (reasoning is None or reasoning == ""):
+            reasoning = "minimal"
         # For OpenRouter, we need to handle the model name differently
         if self.provider == "openrouter":
             # If using OpenRouter, ensure the model name is in the correct format
@@ -159,6 +162,9 @@ class LLMClient:
 
     async def achat(self, *, model: str, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, reasoning: Optional[str] = None, tool_choice: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
         """Async version of chat method."""
+        # Force minimal reasoning for gpt-5-mini unless overridden
+        if model == "gpt-5-mini" and (reasoning is None or reasoning == ""):
+            reasoning = "minimal"
         # For OpenRouter, we need to handle the model name differently
         if self.provider == "openrouter":
             # If using OpenRouter, ensure the model name is in the correct format

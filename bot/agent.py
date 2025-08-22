@@ -5,6 +5,7 @@ from pathlib import Path
 import json
 import asyncio
 import logging
+import threading
 
 from llm.clients import LLMClient
 from .agent_prompt import AGENT_SYSTEM_PROMPT
@@ -54,13 +55,26 @@ class Agent:
             "model": model,
             "message_count": len(messages),
         })
-        resp = await self.llm.achat(
-            model=model,
-            messages=messages,
-            tools=self.openai_tools,
-            tool_choice="auto",
-            temperature=1,  # gpt-5 family requires 1
-        )
+        if hasattr(self.llm, "achat"):
+            resp = await self.llm.achat(
+                model=model,
+                messages=messages,
+                tools=self.openai_tools,
+                tool_choice="auto",
+                temperature=1,  # gpt-5 family requires 1
+            )
+        else:
+            # Fallback: run sync client.chat in a thread to avoid blocking the event loop
+            import functools
+            fn = functools.partial(
+                self.llm.chat,
+                model=model,
+                messages=messages,
+                tools=self.openai_tools,
+                tool_choice="auto",
+                temperature=1,
+            )
+            resp = await asyncio.to_thread(fn)
 
         try:
             content_preview = (resp.choices[0].message.content or "")[:120]  # type: ignore[attr-defined]
@@ -456,18 +470,28 @@ class Agent:
     def converse(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         # Choose model from config
         _, model = resolve_llm_provider_and_model(self.project_root, "smart")
-        # Use async version to avoid threading overhead
+        # Safely execute async flow whether or not an event loop is already running
         import asyncio
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If already in async context, submit to the running loop
-                fut = asyncio.run_coroutine_threadsafe(self._run_tools_loop(messages, model=model), loop)
-                return fut.result()
-            else:
-                return loop.run_until_complete(self._run_tools_loop(messages, model=model))
+            # If there is a running loop (e.g., inside pytest-asyncio), run our coroutine in a new thread/loop
+            asyncio.get_running_loop()
+
+            result_holder: Dict[str, Any] = {}
+
+            def _thread_runner():
+                new_loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(new_loop)
+                    result_holder["resp"] = new_loop.run_until_complete(self._run_tools_loop(messages, model=model))
+                finally:
+                    new_loop.close()
+
+            t = threading.Thread(target=_thread_runner, daemon=True)
+            t.start()
+            t.join()
+            return result_holder["resp"]
         except RuntimeError:
-            # No event loop, create one
+            # No running loop in this thread, create one and run normally
             loop = asyncio.new_event_loop()
             try:
                 return loop.run_until_complete(self._run_tools_loop(messages, model=model))

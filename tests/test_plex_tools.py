@@ -90,9 +90,10 @@ class TestPlexTools:
                 "items": expected_items,
                 "section_type": "movie",
                 "limit": 20,
-                "total_found": 2
+                "total_found": 2,
+                "response_level": "compact",
             }
-            mock_plex_client.get_recently_added.assert_called_once_with("movie", 20)
+            mock_plex_client.get_recently_added.assert_called_once_with("movie", 20, None)
 
             # Test with custom parameters
             result = await tool({
@@ -104,9 +105,10 @@ class TestPlexTools:
                 "items": expected_items,
                 "section_type": "show",
                 "limit": 15,
-                "total_found": 2
+                "total_found": 2,
+                "response_level": "compact",
             }
-            mock_plex_client.get_recently_added.assert_called_with("show", 15)
+            mock_plex_client.get_recently_added.assert_called_with("show", 15, None)
 
     @pytest.mark.asyncio
     async def test_get_plex_on_deck(self, project_root, mock_load_settings, mock_plex_client):
@@ -126,9 +128,10 @@ class TestPlexTools:
             assert result == {
                 "items": expected_items,
                 "limit": 25,
-                "total_found": 2
+                "total_found": 2,
+                "response_level": "compact",
             }
-            mock_plex_client.get_on_deck.assert_called_once_with(25)
+            mock_plex_client.get_on_deck.assert_called_once_with(25, None)
 
     @pytest.mark.asyncio
     async def test_get_plex_continue_watching(self, project_root, mock_load_settings, mock_plex_client):
@@ -148,9 +151,10 @@ class TestPlexTools:
             assert result == {
                 "items": expected_items,
                 "limit": 30,
-                "total_found": 2
+                "total_found": 2,
+                "response_level": "compact",
             }
-            mock_plex_client.get_continue_watching.assert_called_once_with(30)
+            mock_plex_client.get_continue_watching.assert_called_once_with(30, None)
 
     @pytest.mark.asyncio
     async def test_get_plex_unwatched(self, project_root, mock_load_settings, mock_plex_client):
@@ -174,9 +178,10 @@ class TestPlexTools:
                 "items": expected_items,
                 "section_type": "show",
                 "limit": 35,
-                "total_found": 2
+                "total_found": 2,
+                "response_level": "compact",
             }
-            mock_plex_client.get_unwatched.assert_called_once_with("show", 35)
+            mock_plex_client.get_unwatched.assert_called_once_with("show", 35, None)
 
     @pytest.mark.asyncio
     async def test_get_plex_collections(self, project_root, mock_load_settings, mock_plex_client):
@@ -210,9 +215,10 @@ class TestPlexTools:
                 "collections": expected_collections,
                 "section_type": "movie",
                 "limit": 40,
-                "total_found": 2
+                "total_found": 2,
+                "response_level": "compact",
             }
-            mock_plex_client.get_collections.assert_called_once_with("movie", 40)
+            mock_plex_client.get_collections.assert_called_once_with("movie", 40, None)
 
     @pytest.mark.asyncio
     async def test_get_plex_playlists(self, project_root, mock_load_settings, mock_plex_client):
@@ -244,9 +250,10 @@ class TestPlexTools:
             assert result == {
                 "playlists": expected_playlists,
                 "limit": 45,
-                "total_found": 2
+                "total_found": 2,
+                "response_level": "compact",
             }
-            mock_plex_client.get_playlists.assert_called_once_with(45)
+            mock_plex_client.get_playlists.assert_called_once_with(45, None)
 
     @pytest.mark.asyncio
     async def test_get_plex_similar_items(self, project_root, mock_load_settings, mock_plex_client):
@@ -270,9 +277,10 @@ class TestPlexTools:
                 "items": expected_items,
                 "rating_key": 12345,
                 "limit": 12,
-                "total_found": 2
+                "total_found": 2,
+                "response_level": "compact",
             }
-            mock_plex_client.get_similar_items.assert_called_once_with(12345, 12)
+            mock_plex_client.get_similar_items.assert_called_once_with(12345, 12, None)
 
     @pytest.mark.asyncio
     async def test_get_plex_extras(self, project_root, mock_load_settings, mock_plex_client):
@@ -330,7 +338,7 @@ class TestPlexTools:
             tool = make_get_plex_playback_status(project_root)
             result = await tool({})
 
-            assert result == expected_status
+            assert result == {**expected_status, "response_level": "compact"}
             mock_plex_client.get_playback_status.assert_called_once()
 
     @pytest.mark.asyncio
@@ -398,8 +406,8 @@ class TestPlexTools:
             tool = make_get_plex_item_details(project_root)
             result = await tool({"rating_key": 12345})
 
-            assert result == {"item": expected_item}
-            mock_plex_client.get_item_details.assert_called_once_with(12345)
+            assert result == {"item": expected_item, "response_level": "detailed"}
+            mock_plex_client.get_item_details.assert_called_once_with(12345, None)
 
     @pytest.mark.asyncio
     async def test_get_plex_item_details_not_found(self, project_root, mock_load_settings, mock_plex_client):
@@ -416,7 +424,7 @@ class TestPlexTools:
                 "error": "Item not found",
                 "rating_key": 99999
             }
-            mock_plex_client.get_item_details.assert_called_once_with(99999)
+            mock_plex_client.get_item_details.assert_called_once_with(99999, None)
 
     @pytest.mark.asyncio
     async def test_tool_parameter_validation(self, project_root, mock_load_settings, mock_plex_client):
@@ -433,7 +441,7 @@ class TestPlexTools:
             # Should use defaults
             assert result["section_type"] == "movie"
             assert result["limit"] == 20
-            mock_plex_client.get_recently_added.assert_called_once_with("movie", 20)
+            mock_plex_client.get_recently_added.assert_called_once_with("movie", 20, None)
 
     @pytest.mark.asyncio
     async def test_tool_error_handling(self, project_root, mock_load_settings):

@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timezone
-from integrations.plex_client import PlexClient
+from integrations.plex_client import PlexClient, ResponseLevel
 
 
 class TestPlexClient:
@@ -21,7 +21,7 @@ class TestPlexClient:
         """Create a PlexClient instance with mocked dependencies."""
         with patch('integrations.plex_client.PlexServer') as mock_plex_class:
             mock_plex_class.return_value = mock_plex_server
-            client = PlexClient("http://localhost:32400", "test_token")
+            client = PlexClient("http://localhost:32400", "test_token", default_response_level=ResponseLevel.DETAILED)
             return client
 
     def test_get_library_sections(self, plex_client, mock_plex_server):
@@ -88,7 +88,7 @@ class TestPlexClient:
 
         result = plex_client.get_recently_added("movie", 10)
 
-        mock_plex_server.library.section.assert_called_once_with("Movie")
+        mock_plex_server.library.section.assert_called_once_with("Movies")
         mock_section.recentlyAdded.assert_called_once_with(maxresults=10)
         assert len(result) == 2
         assert result[0]["title"] == "Test Movie 1"
@@ -139,7 +139,7 @@ class TestPlexClient:
 
         result = plex_client.get_unwatched("movie", 30)
 
-        mock_plex_server.library.section.assert_called_once_with("Movie")
+        mock_plex_server.library.section.assert_called_once_with("Movies")
         mock_section.unwatched.assert_called_once_with(maxresults=30)
         assert len(result) == 2
         assert result[0]["title"] == "Unwatched Movie 1"
@@ -166,7 +166,7 @@ class TestPlexClient:
 
         result = plex_client.get_collections("movie", 40)
 
-        mock_plex_server.library.section.assert_called_once_with("Movie")
+        mock_plex_server.library.section.assert_called_once_with("Movies")
         mock_section.collections.assert_called_once_with(maxresults=40)
         assert len(result) == 2
         assert result[0]["title"] == "Action Movies"

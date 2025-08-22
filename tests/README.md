@@ -9,8 +9,11 @@ This directory contains comprehensive tests for the MovieBot project, with a foc
 - **`test_plex_tools.py`** - Tests for tool implementations
 - **`test_registry_integration.py`** - Tests for registry integration
 
-### **Integration Tests** (Real Plex Server Required)
+### **Integration Tests** (Live Servers Required)
 - **`test_plex_integration.py`** - Tests against your actual Plex server
+- **`test_radarr_integration.py`** - Tests against your actual Radarr server
+- **`test_sonarr_integration.py`** - Tests against your actual Sonarr server
+- **`test_registry_live_tools.py`** - Smoke tests to invoke all registered live tools
 - **`conftest_integration.py`** - Integration test configuration
 
 ## Running the Tests
@@ -20,9 +23,10 @@ This directory contains comprehensive tests for the MovieBot project, with a foc
 # Install testing dependencies
 pip install -r requirements.txt
 
-# For integration tests, you also need:
-# - A running Plex server
-# - PLEX_TOKEN and PLEX_BASE_URL environment variables
+# For integration tests, you also need live servers and credentials:
+# - A running Plex server (PLEX_BASE_URL, PLEX_TOKEN)
+# - A running Radarr server (RADARR_BASE_URL, RADARR_API_KEY)
+# - A running Sonarr server (SONARR_BASE_URL, SONARR_API_KEY)
 ```
 
 ### **Quick Start:**
@@ -59,7 +63,7 @@ python run_tests.py --integration
 # Unit tests only (fast)
 pytest tests/ -v -m "not integration"
 
-# Integration tests only (requires Plex server)
+# Integration tests only (requires live servers)
 pytest tests/ -v -m "integration"
 
 # All tests
@@ -82,9 +86,9 @@ pytest --cov=bot --cov=integrations --cov-report=term-missing
 - ✅ **Error Handling**: Connection failures, missing items, edge cases
 - ✅ **Data Serialization**: JSON compatibility and data structure validation
 
-### **Integration Tests (Real Plex Server)**
-- ✅ **Real Connectivity**: Actual Plex server connection and authentication
-- ✅ **Live Data**: Real library sections, movies, TV shows
+### **Integration Tests (Real Servers)**
+- ✅ **Real Connectivity**: Actual server connection and authentication (Plex/Radarr/Sonarr)
+- ✅ **Live Data**: Real Plex libraries, Radarr/Sonarr system info and queues
 - ✅ **Performance**: Response time validation under real conditions
 - ✅ **Data Quality**: Real-world data structure and content validation
 - ✅ **Error Scenarios**: Real error handling with actual Plex responses
@@ -164,22 +168,32 @@ export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 
 ### **Integration Test Issues**
 
-**Connection Failed**: Verify Plex server is running and accessible
+**Connection Failed**: Verify servers are running and accessible
 ```bash
 # Check if your .env file has the correct values
 cat .env | grep PLEX
 
-# Test connection manually
-curl -H "X-Plex-Token: YOUR_TOKEN" http://your-server:32400/library/sections
+# Test Plex connection
+curl -H "X-Plex-Token: YOUR_TOKEN" http://your-plex:32400/library/sections
+
+# Test Radarr connection
+curl -H "X-Api-Key: YOUR_RADARR_KEY" http://your-radarr:7878/api/v3/system/status
+
+# Test Sonarr connection
+curl -H "X-Api-Key: YOUR_SONARR_KEY" http://your-sonarr:8989/api/v3/system/status
 ```
 
-**Authentication Failed**: Check PLEX_TOKEN in your .env file is correct and has proper permissions
+**Authentication Failed**: Check tokens/keys (PLEX_TOKEN, RADARR_API_KEY, SONARR_API_KEY) are correct
 
-**Missing .env File**: Create a .env file in your project root with Plex configuration
+**Missing .env File**: Create a .env file in your project root with server configuration
 ```bash
 # Create .env file
 echo "PLEX_BASE_URL=http://your-plex-server:32400" > .env
 echo "PLEX_TOKEN=your_plex_token_here" >> .env
+echo "RADARR_BASE_URL=http://your-radarr-server:7878" >> .env
+echo "RADARR_API_KEY=your_radarr_api_key_here" >> .env
+echo "SONARR_BASE_URL=http://your-sonarr-server:8989" >> .env
+echo "SONARR_API_KEY=your_sonarr_api_key_here" >> .env
 ```
 
 **Timeout Errors**: Increase test timeouts or check server performance
