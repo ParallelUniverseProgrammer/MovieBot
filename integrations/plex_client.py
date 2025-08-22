@@ -186,9 +186,13 @@ class PlexClient:
     def get_continue_watching(self, limit: int = 20, response_level: Optional[ResponseLevel] = None) -> List[Dict[str, Any]]:
         """Get items that can be continued (partially watched)."""
         try:
-            # This gets items that have been started but not finished
-            continue_watching = self.plex.library.continueWatching(maxresults=limit)
-            return self._serialize_items(continue_watching, response_level)
+            # Prefer native continueWatching if available; otherwise, fall back to onDeck
+            lib = self.plex.library
+            if hasattr(lib, "continueWatching") and callable(getattr(lib, "continueWatching")):
+                items = lib.continueWatching(maxresults=limit)
+            else:
+                items = lib.onDeck(maxresults=limit)
+            return self._serialize_items(items, response_level)
         except Exception:
             return []
 
@@ -387,7 +391,20 @@ class PlexClient:
             base_data["user"] = getattr(session, "username", "Unknown")
             base_data["progress"] = getattr(session, "progress", 0)
             base_data["duration"] = getattr(session, "duration", 0)
-            base_data["client"] = getattr(session, "player", {}).get("product", "Unknown")
+            # session.player is a Player object in plexapi with a .product attribute.
+            # Some mocks/tests may provide a dict. Support both forms safely.
+            player_obj = getattr(session, "player", None)
+            client_product = "Unknown"
+            if player_obj is not None:
+                try:
+                    # Prefer attribute access (plexapi Player)
+                    client_product = getattr(player_obj, "product") if getattr(player_obj, "product", None) else client_product
+                except Exception:
+                    client_product = "Unknown"
+                # Fallback if a dict-like object was provided in tests
+                if isinstance(player_obj, dict):
+                    client_product = player_obj.get("product", client_product)
+            base_data["client"] = client_product
         
         return base_data
 

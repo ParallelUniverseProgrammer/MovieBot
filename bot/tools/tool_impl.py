@@ -86,21 +86,49 @@ def _parse_plex_xml_videos(xml_text: str, response_level: ResponseLevel | None) 
         year = v.get('year')
         rating_key = v.get('ratingKey')
         media_type = v.get('type')
+
         # Try to infer resolution/HDR from attributes across nodes
-        video_resolution = v.get('videoResolution')
+        video_resolution = v.get('videoResolution') or v.get('resolution')
         has_hdr = False
-        # Inspect Media nodes for richer attributes
+
+        # Helper to coerce numeric values safely
+        def _as_int(val: str | None) -> int | None:
+            if val and str(val).isdigit():
+                try:
+                    return int(val)
+                except Exception:
+                    return None
+            return None
+
+        # Inspect Media and nested Stream nodes for richer attributes
         for m in v.findall('Media'):
             if not video_resolution:
-                video_resolution = m.get('videoResolution') or m.get('videoResolution')
+                video_resolution = m.get('videoResolution') or m.get('resolution')
+            # Infer from width/height if needed
+            if not video_resolution:
+                width = _as_int(m.get('width'))
+                height = _as_int(m.get('height'))
+                if width and height:
+                    if width >= 3800 or height >= 2000:
+                        video_resolution = '4k'
+                    elif height >= 1000 or width >= 1700:
+                        video_resolution = '1080'
+                    elif height and height >= 700:
+                        video_resolution = '720'
             # Newer PMS exposes videoDynamicRange
             vdr = (m.get('videoDynamicRange') or '').upper()
-            if vdr in {'HDR', 'DOLBY VISION', 'HLG'}:
+            if any(tag in vdr for tag in ('HDR', 'DOLBY VISION', 'HLG', 'PQ', 'HDR10')):
                 has_hdr = True
             # Some servers expose hdr=1/true
             hdr_attr = (m.get('hdr') or '').lower()
             if hdr_attr in {'1', 'true', 'yes'}:
                 has_hdr = True
+            # Streams may contain HDR hints in various attributes
+            for s in m.findall('.//Stream'):
+                attvals = ' '.join([str(vv).lower() for vv in s.attrib.values()])
+                if any(k in attvals for k in ['hdr', 'dolby vision', 'dovi', 'hlg', 'pq', 'smpte2084', 'hdr10']):
+                    has_hdr = True
+
         item: Dict[str, Any] = {
             'title': title,
             'year': int(year) if year and year.isdigit() else None,
