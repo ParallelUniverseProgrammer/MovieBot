@@ -109,19 +109,19 @@ def test_openai_model_reasoning_combos_from_config_sync():
     with patch.object(c.client.chat.completions, "create") as mock_create:
         mock_create.return_value = Mock()
 
-        # exercise each reasoning combo; ensure reasoning not forwarded for OpenAI
+        # exercise each reasoning combo; ensure reasoning forwarded for OpenAI
         for key, model, effort in combos:
             c.chat(model=model, messages=[{"role": "user", "content": "hi"}], reasoning=effort)
             args = mock_create.call_args.kwargs
             assert args["model"] == model
-            assert "reasoning" not in args
+            assert args.get("reasoning") == {"effort": effort}
 
         # quick with explicit max_tokens
         c.chat(model=quick_model, messages=[{"role": "user", "content": "hi"}], max_tokens=quick_max)
         args = mock_create.call_args.kwargs
         assert args["model"] == quick_model and args["max_tokens"] == quick_max
 
-        # summarizer with alt key that must normalize to max_tokens; reasoning still not forwarded
+        # summarizer with alt key that must normalize to max_tokens; reasoning forwarded
         c.chat(
             model=sum_model,
             messages=[{"role": "user", "content": "hi"}],
@@ -131,7 +131,7 @@ def test_openai_model_reasoning_combos_from_config_sync():
         args = mock_create.call_args.kwargs
         assert args["model"] == sum_model
         assert args["max_tokens"] == sum_max_resp and "max_response_tokens" not in args
-        assert "reasoning" not in args
+        assert args.get("reasoning") == {"effort": sum_effort}
 
 
 def test_openai_gpt5mini_reasoning_levels_not_forwarded():
@@ -142,7 +142,7 @@ def test_openai_gpt5mini_reasoning_levels_not_forwarded():
             c.chat(model="gpt-5-mini", messages=[{"role": "user", "content": "hi"}], reasoning=effort)
             args = mock_create.call_args.kwargs
             assert args["model"] == "gpt-5-mini"
-            assert "reasoning" not in args
+            assert args.get("reasoning") == {"effort": effort}
 
 
 def test_openai_normalization_does_not_override_existing_max_tokens():

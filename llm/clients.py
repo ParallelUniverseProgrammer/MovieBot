@@ -196,7 +196,9 @@ class LLMClient:
             params: Dict[str, Any] = {"model": model, "messages": messages}
             if tools is not None:
                 params["tools"] = tools
-            # Do not include 'reasoning' for OpenAI Chat Completions; many models reject it.
+            # Forward reasoning for supported models as a top-level param
+            if reasoning is not None:
+                params["reasoning"] = {"effort": reasoning}
             if tool_choice is not None:
                 params["tool_choice"] = tool_choice
             params.update(self._normalize_params(kwargs))
@@ -222,7 +224,9 @@ class LLMClient:
             params: Dict[str, Any] = {"model": model, "messages": messages}
             if tools is not None:
                 params["tools"] = tools
-            # Do not include 'reasoning' for OpenAI Chat Completions; many models reject it.
+            # Forward reasoning for supported models as a top-level param
+            if reasoning is not None:
+                params["reasoning"] = {"effort": reasoning}
             if tool_choice is not None:
                 params["tool_choice"] = tool_choice
             params.update(self._normalize_params(kwargs))
