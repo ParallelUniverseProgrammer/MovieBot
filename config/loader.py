@@ -97,6 +97,83 @@ def resolve_llm_provider_and_model(project_root: Path, role: str, settings: Sett
     return "openai", default
 
 
+def resolve_llm_selection(project_root: Path, role: str, settings: Settings | None = None) -> tuple[str, dict]:
+    """Return (provider, selection) for a given role: chat|smart|worker.
+
+    Selection is a dict with at least:
+      - model: str
+      - reasoningEffort: Optional[str] (minimal|medium|high)
+      - params: dict[str, Any] of extra request params (e.g., temperature)
+
+    Supports both legacy string config and new object config shape:
+      llm.providers.PROVIDER.ROLE: "model-name" | { model, reasoningEffort?, params? }
+    """
+    rc = load_runtime_config(project_root)
+    providers_cfg = (rc.get("llm", {}) or {}).get("providers", {}) or {}
+    priority = providers_cfg.get("priority") or []
+
+    if settings is None:
+        settings = load_settings(project_root)
+
+    def has_api_key(p: str) -> bool:
+        if p == "openai":
+            return bool(settings.openai_api_key)
+        if p == "openrouter":
+            return bool(settings.openrouter_api_key)
+        return False
+
+    def coerce_selection(raw: object) -> dict:
+        # Allow string or dict; normalize to dict with keys model, reasoningEffort, params
+        if isinstance(raw, str):
+            return {"model": raw, "params": {}}
+        if isinstance(raw, dict):
+            model = raw.get("model") or raw.get("name") or raw.get("id")
+            sel = {
+                "model": str(model) if model else "",
+                "reasoningEffort": raw.get("reasoningEffort"),
+                "params": raw.get("params", {}),
+            }
+            # Merge top-level known params directly too (e.g., temperature) for convenience
+            for k in ("temperature", "top_p", "max_tokens", "tool_choice"):
+                if k in raw and k not in sel["params"]:
+                    sel["params"][k] = raw[k]
+            return sel
+        return {"model": "", "params": {}}
+
+    # Try providers in priority order
+    for p in priority:
+        models = providers_cfg.get(p, {}) or {}
+        raw = models.get(role)
+        if raw and has_api_key(p):
+            sel = coerce_selection(raw)
+            # Default reasoning effort for chat role if not specified
+            if role == "chat" and not sel.get("reasoningEffort"):
+                sel["reasoningEffort"] = "minimal"
+            return p, sel
+
+    # Fallbacks if priority missing or no key available
+    if settings.openai_api_key:
+        raw = (providers_cfg.get("openai", {}) or {}).get(role)
+        if not raw:
+            # role-based defaults
+            raw = "gpt-5-mini" if role == "chat" else ("gpt-5" if role == "smart" else "gpt-5-nano")
+        sel = coerce_selection(raw)
+        if role == "chat" and not sel.get("reasoningEffort"):
+            sel["reasoningEffort"] = "minimal"
+        return "openai", sel
+    if settings.openrouter_api_key:
+        raw = (providers_cfg.get("openrouter", {}) or {}).get(role) or "z-ai/glm-4.5-air:free"
+        sel = coerce_selection(raw)
+        if role == "chat" and not sel.get("reasoningEffort"):
+            sel["reasoningEffort"] = "minimal"
+        return "openrouter", sel
+
+    # Last resort defaults
+    default_model = "gpt-5-mini" if role == "chat" else ("gpt-5" if role == "smart" else "gpt-5-nano")
+    sel = {"model": default_model, "reasoningEffort": "minimal" if role == "chat" else None, "params": {}}
+    return "openai", sel
+
+
 def is_config_complete(settings: Settings, runtime_config: dict) -> bool:
     required_env = [
         settings.discord_token,

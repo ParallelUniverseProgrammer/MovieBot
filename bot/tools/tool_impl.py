@@ -1534,10 +1534,11 @@ def make_query_household_preferences(project_root: Path, llm_client) -> Callable
             flat = _flatten(data)
             compact = "; ".join(f"{k}: {v}" for k, v in flat[:100])
         
-        # Choose model from config
-        from config.loader import resolve_llm_provider_and_model
+        # Choose model and selection from config
+        from config.loader import resolve_llm_selection
         project_root = Path(__file__).resolve().parents[2]
-        _, model = resolve_llm_provider_and_model(project_root, "worker")
+        _, sel = resolve_llm_selection(project_root, "worker")
+        model = sel.get("model", "gpt-5-nano")
         
         # Prepare the prompt for the selected model
         system_message = {
@@ -1555,7 +1556,8 @@ def make_query_household_preferences(project_root: Path, llm_client) -> Callable
             response = await llm_client.achat(
                 model=model,
                 messages=[system_message, user_message],
-                temperature=1,   # Limit to ensure single sentence
+                reasoning=sel.get("reasoningEffort"),
+                **(sel.get("params", {}) or {}),
             )
             print(response)
             # Extract the response content

@@ -248,9 +248,9 @@ class MovieBotClient(discord.Client):
         
         settings = load_settings(self.project_root)  # type: ignore[attr-defined]
         
-        # Resolve provider for chat role via config
-        from config.loader import resolve_llm_provider_and_model
-        provider, _ = resolve_llm_provider_and_model(self.project_root, "chat")  # type: ignore[arg-type]
+        # Choose provider by config priority
+        from config.loader import resolve_llm_selection
+        provider, _sel = resolve_llm_selection(self.project_root, "chat")  # type: ignore[attr-type]
         api_key = settings.openai_api_key if provider == "openai" else (settings.openrouter_api_key or "")
         
         progress_message = None

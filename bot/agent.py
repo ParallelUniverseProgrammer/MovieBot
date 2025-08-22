@@ -18,25 +18,31 @@ from config.loader import resolve_llm_provider_and_model
 class Agent:
     def __init__(self, *, api_key: str, project_root: Path, provider: str = "openai", progress_callback: Optional[Callable[[str, str], None]] = None):
         # Override provider by config priority if available
-        from config.loader import resolve_llm_provider_and_model, load_settings
-        prov, _ = resolve_llm_provider_and_model(project_root, "chat", load_settings(project_root))
+        from config.loader import resolve_llm_selection, load_settings
+        prov, _sel = resolve_llm_selection(project_root, "chat", load_settings(project_root))
         self.llm = LLMClient(api_key, provider=prov)
         self.openai_tools, self.tool_registry = build_openai_tools_and_registry(project_root, self.llm)
         self.project_root = project_root
         self.log = logging.getLogger("moviebot.agent")
         self.progress_callback = progress_callback
 
-    def _chat_once(self, messages: List[Dict[str, Any]], model: str) -> Any:
+    def _chat_once(self, messages: List[Dict[str, Any]], model: str, role: str) -> Any:
         self.log.debug("LLM.chat start", extra={
             "model": model,
             "message_count": len(messages),
         })
+        # Pull optional reasoningEffort/params for role from config
+        from config.loader import resolve_llm_selection
+        _, sel = resolve_llm_selection(self.project_root, role)
+        params = dict(sel.get("params", {}))
+        params.setdefault("temperature", 1)
         resp = self.llm.chat(
             model=model,
             messages=messages,
             tools=self.openai_tools,
-            tool_choice="auto",
-            temperature=1,  # gpt-5 family requires 1
+            reasoning=sel.get("reasoningEffort"),
+            tool_choice=params.pop("tool_choice", "auto"),
+            **params,
         )
 
         try:
@@ -49,30 +55,40 @@ class Agent:
         })
         return resp
 
-    async def _achat_once(self, messages: List[Dict[str, Any]], model: str) -> Any:
+    async def _achat_once(self, messages: List[Dict[str, Any]], model: str, role: str) -> Any:
         """Async version of _chat_once for non-blocking LLM calls."""
         self.log.debug("LLM.achat start", extra={
             "model": model,
             "message_count": len(messages),
         })
         if hasattr(self.llm, "achat"):
+            from config.loader import resolve_llm_selection
+            _, sel = resolve_llm_selection(self.project_root, role)
+            params = dict(sel.get("params", {}))
+            params.setdefault("temperature", 1)
             resp = await self.llm.achat(
                 model=model,
                 messages=messages,
                 tools=self.openai_tools,
-                tool_choice="auto",
-                temperature=1,  # gpt-5 family requires 1
+                reasoning=sel.get("reasoningEffort"),
+                tool_choice=params.pop("tool_choice", "auto"),
+                **params,
             )
         else:
             # Fallback: run sync client.chat in a thread to avoid blocking the event loop
             import functools
+            from config.loader import resolve_llm_selection
+            _, sel = resolve_llm_selection(self.project_root, role)
+            params = dict(sel.get("params", {}))
+            params.setdefault("temperature", 1)
             fn = functools.partial(
                 self.llm.chat,
                 model=model,
                 messages=messages,
                 tools=self.openai_tools,
-                tool_choice="auto",
-                temperature=1,
+                reasoning=sel.get("reasoningEffort"),
+                tool_choice=params.pop("tool_choice", "auto"),
+                **params,
             )
             resp = await asyncio.to_thread(fn)
 
@@ -86,7 +102,7 @@ class Agent:
         })
         return resp
 
-    async def _run_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, max_iters: int | None = None) -> Any:
+    async def _run_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, role: str, max_iters: int | None = None) -> Any:
         # Load runtime config for loop controls
         rc = load_runtime_config(self.project_root)
         cfg_max_iters = int(rc.get("llm", {}).get("maxIters", 8))
@@ -127,7 +143,7 @@ class Agent:
                 except Exception:
                     pass  # Don't let progress updates break the main flow
             
-            last_response = await self._achat_once(messages, model)
+            last_response = await self._achat_once(messages, model, role)
             choice = last_response.choices[0]
             msg = choice.message
             tool_calls = getattr(msg, "tool_calls", None)
@@ -190,7 +206,7 @@ class Agent:
                     "content": json.dumps(result),
                 })
             # Finalization turn after tools: ask model to produce a user-facing reply
-            final_resp = await self._achat_once(messages, model)
+            final_resp = await self._achat_once(messages, model, role)
             try:
                 final_tc = getattr(final_resp.choices[0].message, "tool_calls", None)
             except Exception:
@@ -342,7 +358,7 @@ class Agent:
         
         return batch_results
 
-    async def _arun_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, max_iters: int | None = None) -> Any:
+    async def _arun_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, role: str, max_iters: int | None = None) -> Any:
         """Async version of _run_tools_loop for non-blocking operations."""
         # Load runtime config for loop controls
         rc = load_runtime_config(self.project_root)
@@ -384,7 +400,7 @@ class Agent:
                 except Exception:
                     pass  # Don't let progress updates break the main flow
             
-            last_response = await self._achat_once(messages, model)
+            last_response = await self._achat_once(messages, model, role)
             choice = last_response.choices[0]
             msg = choice.message
             tool_calls = getattr(msg, 'tool_calls', None)
@@ -448,7 +464,7 @@ class Agent:
                     "content": json.dumps(result),
                 })
             # Finalization turn after tools: ask model to produce a user-facing reply
-            final_resp = await self._achat_once(messages, model)
+            final_resp = await self._achat_once(messages, model, role)
             try:
                 final_tc = getattr(final_resp.choices[0].message, "tool_calls", None)
             except Exception:
@@ -469,7 +485,9 @@ class Agent:
 
     def converse(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         # Choose model from config
-        _, model = resolve_llm_provider_and_model(self.project_root, "smart")
+        from config.loader import resolve_llm_selection
+        _, sel = resolve_llm_selection(self.project_root, "smart")
+        model = sel.get("model", "gpt-5")
         # Safely execute async flow whether or not an event loop is already running
         import asyncio
         try:
@@ -482,7 +500,7 @@ class Agent:
                 new_loop = asyncio.new_event_loop()
                 try:
                     asyncio.set_event_loop(new_loop)
-                    result_holder["resp"] = new_loop.run_until_complete(self._run_tools_loop(messages, model=model))
+                    result_holder["resp"] = new_loop.run_until_complete(self._run_tools_loop(messages, model=model, role="smart"))
                 finally:
                     new_loop.close()
 
@@ -494,41 +512,47 @@ class Agent:
             # No running loop in this thread, create one and run normally
             loop = asyncio.new_event_loop()
             try:
-                return loop.run_until_complete(self._run_tools_loop(messages, model=model))
+                return loop.run_until_complete(self._run_tools_loop(messages, model=model, role="smart"))
             finally:
                 loop.close()
 
     async def aconverse(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         """Async version of converse for non-blocking operations."""
         # Choose model from config
-        _, model = resolve_llm_provider_and_model(self.project_root, "smart")
-        return await self._arun_tools_loop(messages, model=model)
+        from config.loader import resolve_llm_selection
+        _, sel = resolve_llm_selection(self.project_root, "smart")
+        model = sel.get("model", "gpt-5")
+        return await self._arun_tools_loop(messages, model=model, role="smart")
 
     def recommend(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         # Choose model from config
-        _, model = resolve_llm_provider_and_model(self.project_root, "smart")
+        from config.loader import resolve_llm_selection
+        _, sel = resolve_llm_selection(self.project_root, "smart")
+        model = sel.get("model", "gpt-5")
         # Use async version to avoid threading overhead
         import asyncio
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 # If already in async context, submit to the running loop
-                fut = asyncio.run_coroutine_threadsafe(self._run_tools_loop(messages, model=model), loop)
+                fut = asyncio.run_coroutine_threadsafe(self._run_tools_loop(messages, model=model, role="smart"), loop)
                 return fut.result()
             else:
-                return loop.run_until_complete(self._run_tools_loop(messages, model=model))
+                return loop.run_until_complete(self._run_tools_loop(messages, model=model, role="smart"))
         except RuntimeError:
             # No event loop, create one
             loop = asyncio.new_event_loop()
             try:
-                return loop.run_until_complete(self._run_tools_loop(messages, model=model))
+                return loop.run_until_complete(self._run_tools_loop(messages, model=model, role="smart"))
             finally:
                 loop.close()
 
     async def arecommend(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         """Async version of recommend for non-blocking operations."""
         # Choose model from config
-        _, model = resolve_llm_provider_and_model(self.project_root, "smart")
-        return await self._arun_tools_loop(messages, model=model)
+        from config.loader import resolve_llm_selection
+        _, sel = resolve_llm_selection(self.project_root, "smart")
+        model = sel.get("model", "gpt-5")
+        return await self._arun_tools_loop(messages, model=model, role="smart")
 
 

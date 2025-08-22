@@ -19,26 +19,31 @@ class SubAgent:
     
     def __init__(self, *, api_key: str, project_root: Path, provider: str = "openai"):
         # Resolve provider for worker role (lightweight tasks)
-        from config.loader import resolve_llm_provider_and_model, load_settings
-        prov, _ = resolve_llm_provider_and_model(project_root, "worker", load_settings(project_root))
+        from config.loader import resolve_llm_selection, load_settings
+        prov, _sel = resolve_llm_selection(project_root, "worker", load_settings(project_root))
         self.llm = LLMClient(api_key, provider=prov)
         self.openai_tools, self.tool_registry = build_openai_tools_and_registry(project_root, self.llm)
         self.project_root = project_root
         self.log = logging.getLogger("moviebot.sub_agent")
 
-    def _chat_once(self, messages: List[Dict[str, Any]], model: str) -> Any:
+    def _chat_once(self, messages: List[Dict[str, Any]], model: str, role: str) -> Any:
         """Single chat interaction with the LLM."""
         self.log.debug("SubAgent LLM.chat start", extra={
             "model": model,
             "message_count": len(messages),
         })
         
+        from config.loader import resolve_llm_selection
+        _, sel = resolve_llm_selection(self.project_root, role)
+        params = dict(sel.get("params", {}))
+        params.setdefault("temperature", 0.7)
         resp = self.llm.chat(
             model=model,
             messages=messages,
             tools=self.openai_tools,
-            tool_choice="auto",
-            temperature=0.7,  # Lower temperature for more focused responses
+            reasoning=sel.get("reasoningEffort"),
+            tool_choice=params.pop("tool_choice", "auto"),
+            **params,
         )
 
         try:
@@ -52,19 +57,24 @@ class SubAgent:
         })
         return resp
 
-    async def _achat_once(self, messages: List[Dict[str, Any]], model: str) -> Any:
+    async def _achat_once(self, messages: List[Dict[str, Any]], model: str, role: str) -> Any:
         """Async version of _chat_once for non-blocking LLM calls."""
         self.log.debug("SubAgent LLM.achat start", extra={
             "model": model,
             "message_count": len(messages),
         })
         
+        from config.loader import resolve_llm_selection
+        _, sel = resolve_llm_selection(self.project_root, role)
+        params = dict(sel.get("params", {}))
+        params.setdefault("temperature", 0.7)
         resp = await self.llm.achat(
             model=model,
             messages=messages,
             tools=self.openai_tools,
-            tool_choice="auto",
-            temperature=0.7,  # Lower temperature for more focused responses
+            reasoning=sel.get("reasoningEffort"),
+            tool_choice=params.pop("tool_choice", "auto"),
+            **params,
         )
 
         try:
@@ -126,11 +136,12 @@ Remember: Search for ALL episodes, not just some of them!
         ]
 
         # Use a lightweight model for efficiency
-        from config.loader import resolve_llm_provider_and_model
-        _, model = resolve_llm_provider_and_model(self.project_root, "worker")
+        from config.loader import resolve_llm_selection
+        _, sel = resolve_llm_selection(self.project_root, "worker")
+        model = sel.get("model", "gpt-5-nano")
 
         # Single iteration for focused task
-        response = self._chat_once(messages, model)
+        response = self._chat_once(messages, model, "worker")
         
         try:
             content = response.choices[0].message.content or ""
@@ -156,7 +167,7 @@ Remember: Search for ALL episodes, not just some of them!
                     for tc, result in zip(tool_calls, results)
                 ]
                 
-                final_response = self._chat_once(final_messages, model)
+                final_response = self._chat_once(final_messages, model, "worker")
                 final_content = final_response.choices[0].message.content or ""
                 
                 self.log.info(f"Episode fallback search completed. Final response: {final_content[:200]}...")
@@ -263,10 +274,11 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
             {"role": "user", "content": f"Update series {series_id} to use the best available quality from {', '.join(fallback_qualities)} since {target_quality} isn't available."}
         ]
 
-        from config.loader import resolve_llm_provider_and_model
-        _, model = resolve_llm_provider_and_model(self.project_root, "worker")
+        from config.loader import resolve_llm_selection
+        _, sel = resolve_llm_selection(self.project_root, "worker")
+        model = sel.get("model", "gpt-5-nano")
 
-        response = self._chat_once(messages, model)
+        response = self._chat_once(messages, model, "worker")
         
         try:
             content = response.choices[0].message.content or ""
