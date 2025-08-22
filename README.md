@@ -59,6 +59,11 @@ DISCORD_GUILD_ID=optional_dev_guild_id
 OPENAI_API_KEY=your_openai_key
 OPENROUTER_API_KEY=your_openrouter_key
 
+# Optional but recommended for OpenRouter rankings/attribution per docs
+# Set to your app/site so OpenRouter can attribute traffic correctly
+OPENROUTER_SITE_URL=https://your-site-or-repo-url
+OPENROUTER_APP_NAME=MovieBot
+
 # Plex
 PLEX_BASE_URL=http://localhost:32400
 PLEX_TOKEN=your_plex_token
@@ -146,6 +151,7 @@ Notes:
 - The router respects `providers.priority` and required API keys.
 - For `chat`, `reasoningEffort` defaults to `minimal` if not specified (keeps latency low with `gpt-5-mini`).
 - Extra `params` are passed directly to the OpenAI‑compatible API (e.g., `temperature`, `top_p`, `max_tokens`, `tool_choice`).
+- When using OpenRouter, we automatically send `HTTP-Referer` and `X-Title` headers derived from `OPENROUTER_SITE_URL` and `OPENROUTER_APP_NAME` to comply with their recommendations.
 
 ### Other runtime tuning
 ```yaml

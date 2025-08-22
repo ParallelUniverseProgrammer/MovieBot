@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
+import os
 
 from openai import AsyncOpenAI, OpenAI
+try:
+    from openai import BadRequestError  # type: ignore
+except Exception:  # pragma: no cover
+    BadRequestError = Exception  # fallback if SDK changes
 import tiktoken
 
 
@@ -29,6 +34,14 @@ class OpenRouterClient:
         )
         # Initialize tiktoken for token counting
         self._encoding = tiktoken.get_encoding("cl100k_base")  # GPT-4/5 family encoding
+
+        # Default OpenRouter tracking headers (optional but recommended by OpenRouter docs)
+        referer = os.getenv("OPENROUTER_SITE_URL") or "https://github.com/your-repo/moviebot"
+        app_title = os.getenv("OPENROUTER_APP_NAME") or "MovieBot"
+        self._default_headers: Dict[str, str] = {
+            "HTTP-Referer": referer,
+            "X-Title": app_title,
+        }
 
     def count_tokens(self, messages: List[Dict[str, Any]]) -> int:
         """Count the total number of tokens in a conversation.
@@ -68,20 +81,18 @@ class OpenRouterClient:
         params: Dict[str, Any] = {"model": model, "messages": messages}
         if tools is not None:
             params["tools"] = tools
-        # Reasoning param via extra_body for broader SDK compatibility
+        # Reasoning param (top-level per SDK expectations)
         if reasoning is not None:
-            extra_body = params.get("extra_body", {})
-            extra_body.update({"reasoning": {"effort": reasoning}})
-            params["extra_body"] = extra_body
+            params["reasoning"] = {"effort": reasoning}
         if tool_choice is not None:
             params["tool_choice"] = tool_choice
         # Normalize any provided kwargs
         kwargs = self._normalize_params(kwargs)
-        # Add OpenRouter-specific headers for tracking
-        extra_headers = {
-            "HTTP-Referer": "https://github.com/your-repo/moviebot",  # Optional: for rankings
-            "X-Title": "MovieBot",  # Optional: for rankings
-        }
+        # Add OpenRouter-specific headers for tracking (merge env-driven defaults with any caller-provided headers)
+        provided_headers = kwargs.pop("extra_headers", None)
+        extra_headers = dict(self._default_headers)
+        if isinstance(provided_headers, dict):
+            extra_headers.update(provided_headers)
         params["extra_headers"] = extra_headers
         params.update(kwargs)
         
@@ -93,18 +104,16 @@ class OpenRouterClient:
         if tools is not None:
             params["tools"] = tools
         if reasoning is not None:
-            extra_body = params.get("extra_body", {})
-            extra_body.update({"reasoning": {"effort": reasoning}})
-            params["extra_body"] = extra_body
+            params["reasoning"] = {"effort": reasoning}
         if tool_choice is not None:
             params["tool_choice"] = tool_choice
         # Normalize any provided kwargs
         kwargs = self._normalize_params(kwargs)
-        # Add OpenRouter-specific headers for tracking
-        extra_headers = {
-            "HTTP-Referer": "https://github.com/your-repo/moviebot",  # Optional: for rankings
-            "X-Title": "MovieBot",  # Optional: for rankings
-        }
+        # Add OpenRouter-specific headers for tracking (merge env-driven defaults with any caller-provided headers)
+        provided_headers = kwargs.pop("extra_headers", None)
+        extra_headers = dict(self._default_headers)
+        if isinstance(provided_headers, dict):
+            extra_headers.update(provided_headers)
         params["extra_headers"] = extra_headers
         params.update(kwargs)
         
@@ -175,10 +184,7 @@ class LLMClient:
             params: Dict[str, Any] = {"model": model, "messages": messages}
             if tools is not None:
                 params["tools"] = tools
-            if reasoning is not None:
-                extra_body = params.get("extra_body", {})
-                extra_body.update({"reasoning": {"effort": reasoning}})
-                params["extra_body"] = extra_body
+            # Do not include 'reasoning' for OpenAI Chat Completions; many models reject it.
             if tool_choice is not None:
                 params["tool_choice"] = tool_choice
             params.update(self._normalize_params(kwargs))
@@ -204,10 +210,7 @@ class LLMClient:
             params: Dict[str, Any] = {"model": model, "messages": messages}
             if tools is not None:
                 params["tools"] = tools
-            if reasoning is not None:
-                extra_body = params.get("extra_body", {})
-                extra_body.update({"reasoning": {"effort": reasoning}})
-                params["extra_body"] = extra_body
+            # Do not include 'reasoning' for OpenAI Chat Completions; many models reject it.
             if tool_choice is not None:
                 params["tool_choice"] = tool_choice
             params.update(self._normalize_params(kwargs))

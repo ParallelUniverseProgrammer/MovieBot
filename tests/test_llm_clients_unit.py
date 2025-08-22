@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import Mock, patch, AsyncMock
 
 from llm.clients import LLMClient, OpenRouterClient
+import os
 
 
 def test_openrouter_count_tokens_and_headers_sync_chat():
@@ -43,15 +44,44 @@ async def test_openrouter_async_chat_headers():
         assert "extra_headers" in call.kwargs
 
 
+def test_openrouter_headers_use_env_vars(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_SITE_URL", "https://example.com")
+    monkeypatch.setenv("OPENROUTER_APP_NAME", "MyApp")
+    client = OpenRouterClient("test-key")
+    with patch.object(client.client.chat.completions, "create") as mock_create:
+        mock_create.return_value = Mock()
+        client.chat(model="z-ai/glm-4.5-air:free", messages=[{"role": "user", "content": "hi"}])
+        headers = mock_create.call_args.kwargs["extra_headers"]
+        assert headers["HTTP-Referer"] == "https://example.com"
+        assert headers["X-Title"] == "MyApp"
+
+
+def test_openrouter_headers_merge_with_caller_provided(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_SITE_URL", "https://mysite")
+    monkeypatch.setenv("OPENROUTER_APP_NAME", "MovieBot")
+    client = OpenRouterClient("test-key")
+    with patch.object(client.client.chat.completions, "create") as mock_create:
+        mock_create.return_value = Mock()
+        client.chat(
+            model="z-ai/glm-4.5-air:free",
+            messages=[{"role": "user", "content": "hi"}],
+            extra_headers={"X-Custom": "1"}
+        )
+        headers = mock_create.call_args.kwargs["extra_headers"]
+        assert headers["HTTP-Referer"] == "https://mysite"
+        assert headers["X-Title"] == "MovieBot"
+        assert headers["X-Custom"] == "1"
+
+
 def test_llmclient_openai_sync_chat_reasoning_and_tools():
     c = LLMClient("key", provider="openai")
     with patch.object(c.client.chat.completions, "create") as mock_create:
         mock_create.return_value = Mock()
         tools = [{"type": "function", "function": {"name": "t", "parameters": {}}}]
         c.chat(model="gpt-5-mini", messages=[{"role": "user", "content": "hi"}], tools=tools)
-        # Should set minimal reasoning for gpt-5-mini
+        # OpenAI path should not include 'reasoning' param; tools should pass through
         args = mock_create.call_args.kwargs
-        assert "reasoning" in args and args["reasoning"] == {"effort": "minimal"}
+        assert "reasoning" not in args
         assert args["tools"] == tools
 
 
@@ -67,7 +97,7 @@ async def test_llmclient_openai_async_chat_reasoning_and_tool_choice():
         )
         assert out == {"id": "x"}
         args = mock_acreate.call_args.kwargs
-        assert args["reasoning"] == {"effort": "minimal"}
+        assert "reasoning" not in args
         assert args["tool_choice"] == "required"
 
 
