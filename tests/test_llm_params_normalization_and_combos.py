@@ -60,10 +60,10 @@ def test_llmclient_openai_normalize_params_and_tool_choice_sync():
             tool_choice="auto",
         )
         args = mock_create.call_args.kwargs
-        # normalization to max_tokens
-        assert args["max_tokens"] == 99
-        assert "max_completion_tokens" not in args
-        # tool_choice is passed through; reasoning must NOT be present for OpenAI path
+        # normalization to max_completion_tokens for GPT-5 family
+        assert args["max_completion_tokens"] == 99
+        assert "max_tokens" not in args
+        # tool_choice is passed through
         assert args.get("tool_choice") == "auto"
         assert "reasoning" not in args
 
@@ -114,12 +114,14 @@ def test_openai_model_reasoning_combos_from_config_sync():
             c.chat(model=model, messages=[{"role": "user", "content": "hi"}], reasoning=effort)
             args = mock_create.call_args.kwargs
             assert args["model"] == model
-            assert args.get("reasoning") == {"effort": effort}
+            assert args.get("reasoning_effort") == effort
 
         # quick with explicit max_tokens
         c.chat(model=quick_model, messages=[{"role": "user", "content": "hi"}], max_tokens=quick_max)
         args = mock_create.call_args.kwargs
-        assert args["model"] == quick_model and args["max_tokens"] == quick_max
+        # GPT-5 quick path should coerce to max_completion_tokens
+        assert args["model"] == quick_model and args["max_completion_tokens"] == quick_max
+        assert "max_tokens" not in args
 
         # summarizer with alt key that must normalize to max_tokens; reasoning forwarded
         c.chat(
@@ -130,8 +132,9 @@ def test_openai_model_reasoning_combos_from_config_sync():
         )
         args = mock_create.call_args.kwargs
         assert args["model"] == sum_model
-        assert args["max_tokens"] == sum_max_resp and "max_response_tokens" not in args
-        assert args.get("reasoning") == {"effort": sum_effort}
+        # GPT-5 summarizer should coerce to max_completion_tokens as well
+        assert args["max_completion_tokens"] == sum_max_resp and "max_response_tokens" not in args
+        assert args.get("reasoning_effort") == sum_effort
 
 
 def test_openai_gpt5mini_reasoning_levels_not_forwarded():
@@ -142,7 +145,7 @@ def test_openai_gpt5mini_reasoning_levels_not_forwarded():
             c.chat(model="gpt-5-mini", messages=[{"role": "user", "content": "hi"}], reasoning=effort)
             args = mock_create.call_args.kwargs
             assert args["model"] == "gpt-5-mini"
-            assert args.get("reasoning") == {"effort": effort}
+            assert args.get("reasoning_effort") == effort
 
 
 def test_openai_normalization_does_not_override_existing_max_tokens():
@@ -156,8 +159,9 @@ def test_openai_normalization_does_not_override_existing_max_tokens():
             max_completion_tokens=99,
         )
         args = mock_create.call_args.kwargs
-        assert args["max_tokens"] == 123
-        assert "max_completion_tokens" not in args
+        # For GPT-5, explicit max_tokens should be coerced to max_completion_tokens
+        assert args["max_completion_tokens"] == 123
+        assert "max_tokens" not in args
 
 
 def test_openrouter_normalization_does_not_override_existing_max_tokens_and_passes_tool_choice():

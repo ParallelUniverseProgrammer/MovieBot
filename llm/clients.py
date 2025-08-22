@@ -177,6 +177,37 @@ class LLMClient:
                 out.pop(k, None)
         return out
 
+    def _normalize_params_openai(self, model: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize params for OpenAI Chat Completions.
+
+        - For GPT-5 and o1/o3 family models, prefer 'max_completion_tokens'.
+        - Accept alternates and coerce appropriately.
+        """
+        out = dict(params)
+        model_lower = (model or "").lower()
+        prefers_completion = model_lower.startswith("gpt-5") or model_lower.startswith("o1") or model_lower.startswith("o3")
+        # Collect candidate values
+        alt_keys = ("max_response_tokens", "max_output_tokens", "max_completion_tokens")
+        alt_val = None
+        for k in alt_keys:
+            if k in out and alt_val is None:
+                alt_val = out[k]
+            # remove all alt keys regardless
+            if k in out:
+                out.pop(k, None)
+        # If model prefers completion tokens
+        if prefers_completion:
+            if "max_tokens" in out:
+                out["max_completion_tokens"] = out.pop("max_tokens")
+            elif alt_val is not None:
+                out["max_completion_tokens"] = alt_val
+            # else leave as-is
+        else:
+            # Older models: keep max_tokens if present; if only alt provided, convert to max_tokens
+            if "max_tokens" not in out and alt_val is not None:
+                out["max_tokens"] = alt_val
+        return out
+
     def chat(self, *, model: str, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, reasoning: Optional[str] = None, tool_choice: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
         # Do not force reasoning; rely on selection providers
         # For OpenRouter, we need to handle the model name differently
@@ -196,12 +227,12 @@ class LLMClient:
             params: Dict[str, Any] = {"model": model, "messages": messages}
             if tools is not None:
                 params["tools"] = tools
-            # Forward reasoning for supported models as a top-level param
+            # Forward reasoning for supported models using reasoning_effort (no mapping)
             if reasoning is not None:
-                params["reasoning"] = {"effort": reasoning}
+                params["reasoning_effort"] = str(reasoning)
             if tool_choice is not None:
                 params["tool_choice"] = tool_choice
-            params.update(self._normalize_params(kwargs))
+            params.update(self._normalize_params_openai(model, kwargs))
             return self.client.chat.completions.create(**params)  # type: ignore[no-any-return]
 
     async def achat(self, *, model: str, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, reasoning: Optional[str] = None, tool_choice: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
@@ -224,12 +255,12 @@ class LLMClient:
             params: Dict[str, Any] = {"model": model, "messages": messages}
             if tools is not None:
                 params["tools"] = tools
-            # Forward reasoning for supported models as a top-level param
+            # Forward reasoning for supported models using reasoning_effort (no mapping)
             if reasoning is not None:
-                params["reasoning"] = {"effort": reasoning}
+                params["reasoning_effort"] = str(reasoning)
             if tool_choice is not None:
                 params["tool_choice"] = tool_choice
-            params.update(self._normalize_params(kwargs))
+            params.update(self._normalize_params_openai(model, kwargs))
             return await self.async_client.chat.completions.create(**params)  # type: ignore[no-any-return]
 
 

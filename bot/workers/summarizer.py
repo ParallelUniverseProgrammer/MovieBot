@@ -26,7 +26,7 @@ class SummarizerWorker:
                 f"Schema hint: {schema_hint or '-'}\nMax chars: {target_chars}\n\nData:\n" + str(obj)
             )[:4000],
         }
-        resp = await self.llm.achat(model=model, messages=[system, user], **(sel.get("params", {}) or {}))
+        resp = await self.llm.achat(model=model, messages=[system, user], reasoning=sel.get("reasoningEffort"), **(sel.get("params", {}) or {}))
         content = getattr(getattr(resp, "choices", [{}])[0], "message", {}).get("content", "")
         if isinstance(content, str) and len(content) > target_chars:
             return content[: target_chars - 1] + "…"
