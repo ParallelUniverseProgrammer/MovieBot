@@ -8,6 +8,9 @@ from dotenv import load_dotenv
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+# Load environment from .env for all tests (does not override existing env)
+load_dotenv(project_root / ".env")
+
 # Common test fixtures and configuration
 @pytest.fixture(scope="session")
 def test_project_root():

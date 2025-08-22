@@ -68,8 +68,11 @@ class OpenRouterClient:
         params: Dict[str, Any] = {"model": model, "messages": messages}
         if tools is not None:
             params["tools"] = tools
+        # Reasoning param via extra_body for broader SDK compatibility
         if reasoning is not None:
-            params["reasoning"] = {"effort": reasoning}
+            extra_body = params.get("extra_body", {})
+            extra_body.update({"reasoning": {"effort": reasoning}})
+            params["extra_body"] = extra_body
         if tool_choice is not None:
             params["tool_choice"] = tool_choice
         # Normalize any provided kwargs
@@ -90,7 +93,9 @@ class OpenRouterClient:
         if tools is not None:
             params["tools"] = tools
         if reasoning is not None:
-            params["reasoning"] = {"effort": reasoning}
+            extra_body = params.get("extra_body", {})
+            extra_body.update({"reasoning": {"effort": reasoning}})
+            params["extra_body"] = extra_body
         if tool_choice is not None:
             params["tool_choice"] = tool_choice
         # Normalize any provided kwargs
@@ -152,9 +157,7 @@ class LLMClient:
         return out
 
     def chat(self, *, model: str, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, reasoning: Optional[str] = None, tool_choice: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
-        # Force minimal reasoning for gpt-5-mini unless overridden
-        if model == "gpt-5-mini" and (reasoning is None or reasoning == ""):
-            reasoning = "minimal"
+        # Do not force reasoning; rely on selection providers
         # For OpenRouter, we need to handle the model name differently
         if self.provider == "openrouter":
             # If using OpenRouter, ensure the model name is in the correct format
@@ -173,7 +176,9 @@ class LLMClient:
             if tools is not None:
                 params["tools"] = tools
             if reasoning is not None:
-                params["reasoning"] = {"effort": reasoning}
+                extra_body = params.get("extra_body", {})
+                extra_body.update({"reasoning": {"effort": reasoning}})
+                params["extra_body"] = extra_body
             if tool_choice is not None:
                 params["tool_choice"] = tool_choice
             params.update(self._normalize_params(kwargs))
@@ -181,9 +186,7 @@ class LLMClient:
 
     async def achat(self, *, model: str, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, reasoning: Optional[str] = None, tool_choice: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
         """Async version of chat method."""
-        # Force minimal reasoning for gpt-5-mini unless overridden
-        if model == "gpt-5-mini" and (reasoning is None or reasoning == ""):
-            reasoning = "minimal"
+        # Do not force reasoning; rely on selection providers
         # For OpenRouter, we need to handle the model name differently
         if self.provider == "openrouter":
             # If using OpenRouter, ensure the model name is in the correct format
@@ -202,7 +205,9 @@ class LLMClient:
             if tools is not None:
                 params["tools"] = tools
             if reasoning is not None:
-                params["reasoning"] = {"effort": reasoning}
+                extra_body = params.get("extra_body", {})
+                extra_body.update({"reasoning": {"effort": reasoning}})
+                params["extra_body"] = extra_body
             if tool_choice is not None:
                 params["tool_choice"] = tool_choice
             params.update(self._normalize_params(kwargs))
