@@ -23,7 +23,8 @@ class TMDbClient:
         self.default_response_level = default_response_level
 
     async def close(self) -> None:
-        await self._client.aclose()
+        # SharedHttpClient exposes close()
+        await self._client.close()
 
     def set_response_level(self, level: TMDbResponseLevel) -> None:
         """Dynamically change the default response level for all subsequent calls."""
@@ -125,8 +126,7 @@ class TMDbClient:
             query=query, year=year, primary_release_year=primary_release_year,
             language=language, page=page
         )
-        resp = await self._client.request("GET", f"{self._base}/search/movie", params=params)
-        data = await resp.json()
+        data = await self._get_json("GET", f"{self._base}/search/movie", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def search_tv(self, query: str, first_air_date_year: Optional[int] = None,
@@ -137,18 +137,14 @@ class TMDbClient:
             query=query, first_air_date_year=first_air_date_year,
             language=language, page=page
         )
-        r = await self._client.get("/search/tv", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/search/tv", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def search_multi(self, query: str, language: str = "en-US", 
                           page: int = 1, response_level: Optional[TMDbResponseLevel] = None) -> Dict[str, Any]:
         """Search across movies, TV shows, and people with configurable response detail."""
         params = self._get_params(query=query, language=language, page=page)
-        r = await self._client.get("/search/multi", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/search/multi", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def movie_details(self, movie_id: int, language: str = "en-US",
@@ -159,9 +155,7 @@ class TMDbClient:
         if append_to_response:
             params["append_to_response"] = append_to_response
         
-        r = await self._client.get(f"/movie/{movie_id}", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/movie/{movie_id}", params=params)
         return self._serialize_tmdb_item(data, response_level)
 
     async def tv_details(self, tv_id: int, language: str = "en-US",
@@ -172,36 +166,28 @@ class TMDbClient:
         if append_to_response:
             params["append_to_response"] = append_to_response
         
-        r = await self._client.get(f"/tv/{tv_id}", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/tv/{tv_id}", params=params)
         return self._serialize_tmdb_item(data, response_level)
 
     async def recommendations(self, tmdb_id: int, language: str = "en-US", 
                             page: int = 1, response_level: Optional[TMDbResponseLevel] = None) -> Dict[str, Any]:
         """Get movie recommendations with configurable response detail."""
         params = self._get_params(language=language, page=page)
-        r = await self._client.get(f"/movie/{tmdb_id}/recommendations", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/movie/{tmdb_id}/recommendations", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def similar_movies(self, movie_id: int, language: str = "en-US",
                            page: int = 1, response_level: Optional[TMDbResponseLevel] = None) -> Dict[str, Any]:
         """Get similar movies with configurable response detail."""
         params = self._get_params(language=language, page=page)
-        r = await self._client.get(f"/movie/{movie_id}/similar", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/movie/{movie_id}/similar", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def similar_tv(self, tv_id: int, language: str = "en-US",
                         page: int = 1, response_level: Optional[TMDbResponseLevel] = None) -> Dict[str, Any]:
         """Get similar TV series with configurable response detail."""
         params = self._get_params(language=language, page=page)
-        r = await self._client.get(f"/tv/{tv_id}/similar", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/tv/{tv_id}/similar", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def discover_movies(self, sort_by: str = "popularity.desc",
@@ -233,9 +219,7 @@ class TMDbClient:
             with_watch_providers=",".join(map(str, with_watch_providers)) if with_watch_providers else None,
             watch_region=watch_region, language=language, page=page
         )
-        r = await self._client.get("/discover/movie", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/discover/movie", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def discover_tv(self, sort_by: str = "popularity.desc",
@@ -265,161 +249,121 @@ class TMDbClient:
             with_watch_providers=",".join(map(str, with_watch_providers)) if with_watch_providers else None,
             watch_region=watch_region, language=language, page=page
         )
-        r = await self._client.get("/discover/tv", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/discover/tv", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def trending(self, media_type: str = "all", time_window: str = "week",
                       language: str = "en-US", response_level: Optional[TMDbResponseLevel] = None) -> Dict[str, Any]:
         """Get trending movies, TV shows, or people with configurable response detail."""
         params = self._get_params(language=language)
-        r = await self._client.get(f"/trending/{media_type}/{time_window}", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/trending/{media_type}/{time_window}", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def popular_movies(self, language: str = "en-US", page: int = 1, 
                            response_level: Optional[TMDbResponseLevel] = None) -> Dict[str, Any]:
         """Get popular movies with configurable response detail."""
         params = self._get_params(language=language, page=page)
-        r = await self._client.get("/movie/popular", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/movie/popular", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def top_rated_movies(self, language: str = "en-US", page: int = 1, 
                               response_level: Optional[TMDbResponseLevel] = None) -> Dict[str, Any]:
         """Get top rated movies with configurable response detail."""
         params = self._get_params(language=language, page=page)
-        r = await self._client.get("/movie/top_rated", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/movie/top_rated", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def upcoming_movies(self, language: str = "en-US", page: int = 1, 
                              response_level: Optional[TMDbResponseLevel] = None) -> Dict[str, Any]:
         """Get upcoming movie releases with configurable response detail."""
         params = self._get_params(language=language, page=page)
-        r = await self._client.get("/movie/upcoming", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/movie/upcoming", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def now_playing_movies(self, language: str = "en-US", page: int = 1, 
                                 response_level: Optional[TMDbResponseLevel] = None) -> Dict[str, Any]:
         """Get movies currently in theaters with configurable response detail."""
         params = self._get_params(language=language, page=page)
-        r = await self._client.get("/movie/now_playing", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/movie/now_playing", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def popular_tv(self, language: str = "en-US", page: int = 1, 
                          response_level: Optional[TMDbResponseLevel] = None) -> Dict[str, Any]:
         """Get popular TV series with configurable response detail."""
         params = self._get_params(language=language, page=page)
-        r = await self._client.get("/tv/popular", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/tv/popular", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def top_rated_tv(self, language: str = "en-US", page: int = 1, 
                            response_level: Optional[TMDbResponseLevel] = None) -> Dict[str, Any]:
         """Get top rated TV series with configurable response detail."""
         params = self._get_params(language=language, page=page)
-        r = await self._client.get("/tv/top_rated", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/tv/top_rated", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def on_the_air_tv(self, language: str = "en-US", page: int = 1, 
                             response_level: Optional[TMDbResponseLevel] = None) -> Dict[str, Any]:
         """Get TV series currently on the air with configurable response detail."""
         params = self._get_params(language=language, page=page)
-        r = await self._client.get("/tv/on_the_air", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/tv/on_the_air", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def airing_today_tv(self, language: str = "en-US", page: int = 1, 
                               response_level: Optional[TMDbResponseLevel] = None) -> Dict[str, Any]:
         """Get TV series airing today with configurable response detail."""
         params = self._get_params(language=language, page=page)
-        r = await self._client.get("/tv/airing_today", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/tv/airing_today", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def genres(self, media_type: str = "movie", language: str = "en-US") -> Dict[str, Any]:
         """Get available genres for movies or TV"""
         params = self._get_params(language=language)
-        r = await self._client.get(f"/genre/{media_type}/list", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/genre/{media_type}/list", params=params)
 
-    async def keywords(self, media_type: str = "movie", language: str = "en-US") -> Dict[str, Any]:
-        """Get available keywords for movies or TV"""
-        params = self._get_params(language=language)
-        r = await self._client.get(f"/keyword/{media_type}/list", params=params)
-        r.raise_for_status()
-        return r.json()
+    async def search_keyword(self, query: str, page: int = 1) -> Dict[str, Any]:
+        """Search keywords (TMDb v3: /search/keyword)."""
+        params = self._get_params(query=query, page=page)
+        return await self._get_json("GET", f"{self._base}/search/keyword", params=params)
 
     async def movie_credits(self, movie_id: int, language: str = "en-US") -> Dict[str, Any]:
         """Get cast and crew for a movie"""
         params = self._get_params(language=language)
-        r = await self._client.get(f"/movie/{movie_id}/credits", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/movie/{movie_id}/credits", params=params)
 
     async def tv_credits(self, tv_id: int, language: str = "en-US") -> Dict[str, Any]:
         """Get cast and crew for a TV series"""
         params = self._get_params(language=language)
-        r = await self._client.get(f"/tv/{tv_id}/credits", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/tv/{tv_id}/credits", params=params)
 
     async def movie_videos(self, movie_id: int, language: str = "en-US") -> Dict[str, Any]:
         """Get videos (trailers, clips) for a movie"""
         params = self._get_params(language=language)
-        r = await self._client.get(f"/movie/{movie_id}/videos", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/movie/{movie_id}/videos", params=params)
 
     async def tv_videos(self, tv_id: int, language: str = "en-US") -> Dict[str, Any]:
         """Get videos for a TV series"""
         params = self._get_params(language=language)
-        r = await self._client.get(f"/tv/{tv_id}/videos", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/tv/{tv_id}/videos", params=params)
 
     async def movie_images(self, movie_id: int, language: str = "en-US") -> Dict[str, Any]:
         """Get images (posters, backdrops) for a movie"""
         params = self._get_params(language=language)
-        r = await self._client.get(f"/movie/{movie_id}/images", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/movie/{movie_id}/images", params=params)
 
     async def tv_images(self, tv_id: int, language: str = "en-US") -> Dict[str, Any]:
         """Get images for a TV series"""
         params = self._get_params(language=language)
-        r = await self._client.get(f"/tv/{tv_id}/images", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/tv/{tv_id}/images", params=params)
 
     async def movie_reviews(self, movie_id: int, language: str = "en-US", page: int = 1) -> Dict[str, Any]:
         """Get reviews for a movie"""
         params = self._get_params(language=language, page=page)
-        r = await self._client.get(f"/movie/{movie_id}/reviews", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/movie/{movie_id}/reviews", params=params)
 
     async def collection_details(self, collection_id: int, language: str = "en-US") -> Dict[str, Any]:
         """Get details about a movie collection/franchise"""
         params = self._get_params(language=language)
-        r = await self._client.get(f"/collection/{collection_id}", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/collection/{collection_id}", params=params)
 
     async def person_details(self, person_id: int, language: str = "en-US",
                            append_to_response: Optional[str] = None) -> Dict[str, Any]:
@@ -428,31 +372,23 @@ class TMDbClient:
         if append_to_response:
             params["append_to_response"] = append_to_response
         
-        r = await self._client.get(f"/person/{person_id}", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/person/{person_id}", params=params)
 
     async def person_movie_credits(self, person_id: int, language: str = "en-US") -> Dict[str, Any]:
         """Get movie credits for a person"""
         params = self._get_params(language=language)
-        r = await self._client.get(f"/person/{person_id}/movie_credits", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/person/{person_id}/movie_credits", params=params)
 
     async def person_tv_credits(self, person_id: int, language: str = "en-US") -> Dict[str, Any]:
         """Get TV credits for a person"""
         params = self._get_params(language=language)
-        r = await self._client.get(f"/person/{person_id}/tv_credits", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/person/{person_id}/tv_credits", params=params)
 
     async def search_person(self, query: str, language: str = "en-US", page: int = 1, 
                            response_level: Optional[TMDbResponseLevel] = None) -> Dict[str, Any]:
         """Search for people (actors, directors, etc.) with configurable response detail."""
         params = self._get_params(query=query, language=language, page=page)
-        r = await self._client.get("/search/person", params=params)
-        r.raise_for_status()
-        data = r.json()
+        data = await self._get_json("GET", f"{self._base}/search/person", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
     async def movie_changes(self, movie_id: int, start_date: Optional[str] = None,
@@ -464,9 +400,7 @@ class TMDbClient:
         if end_date:
             params["end_date"] = end_date
         
-        r = await self._client.get(f"/movie/{movie_id}/changes", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/movie/{movie_id}/changes", params=params)
 
     async def tv_changes(self, tv_id: int, start_date: Optional[str] = None,
                         end_date: Optional[str] = None) -> Dict[str, Any]:
@@ -477,28 +411,41 @@ class TMDbClient:
         if end_date:
             params["end_date"] = end_date
         
-        r = await self._client.get(f"/tv/{tv_id}/changes", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/tv/{tv_id}/changes", params=params)
 
     async def watch_providers_movie(self, movie_id: int, language: str = "en-US") -> Dict[str, Any]:
         """Get where a movie can be watched (streaming, rental, etc.)"""
         params = self._get_params(language=language)
-        r = await self._client.get(f"/movie/{movie_id}/watch/providers", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/movie/{movie_id}/watch/providers", params=params)
 
     async def watch_providers_tv(self, tv_id: int, language: str = "en-US") -> Dict[str, Any]:
         """Get where a TV series can be watched"""
         params = self._get_params(language=language)
-        r = await self._client.get(f"/tv/{tv_id}/watch/providers", params=params)
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/tv/{tv_id}/watch/providers", params=params)
 
     async def configuration(self) -> Dict[str, Any]:
         """Get TMDb configuration (image URLs, etc.)"""
-        r = await self._client.get("/configuration", params={"api_key": self.api_key})
-        r.raise_for_status()
-        return r.json()
+        return await self._get_json("GET", f"{self._base}/configuration", params={"api_key": self.api_key})
+
+    async def _get_json(self, method: str, url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Internal helper to perform an HTTP request and parse JSON consistently, with error handling."""
+        resp = await self._client.request(method, url, params=params)
+        try:
+            # Basic error handling per TMDb v3; non-2xx should surface as errors
+            if getattr(resp, "status", 200) >= 400:
+                try:
+                    txt = await resp.text()
+                except Exception:
+                    txt = ""
+                # Include status code and snippet for diagnostics
+                raise RuntimeError(f"TMDb API error {resp.status}: {txt[:200]}")
+            data = await resp.json()
+            return data
+        finally:
+            # Ensure connection is released back to the pool
+            try:
+                resp.release()
+            except Exception:
+                pass
 
 

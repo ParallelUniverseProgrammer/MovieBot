@@ -39,7 +39,7 @@ class SharedHttpClient:
             limit_per_host=cfg.max_connections // 4,  # Distribute connections across hosts
             keepalive_timeout=30,  # Keep connections alive for 30 seconds
             enable_cleanup_closed=True,  # Clean up closed connections
-            ssl=False,
+            ssl=True,
             use_dns_cache=True,  # Cache DNS lookups
             ttl_dns_cache=300,  # DNS cache TTL of 5 minutes
         )
@@ -90,21 +90,21 @@ class SharedHttpClient:
         while True:
             try:
                 t0 = time.time()
-                async with self._session.request(method, url, params=params, json=json, headers=headers) as resp:
-                    duration_ms = int((time.time() - t0) * 1000)
-                    status = resp.status
-                    # Retry on 429/5xx for idempotent methods
-                    if method.upper() in allow_retry_on_methods and status in (429, 500, 502, 503, 504):
-                        body = await resp.text()
-                        self._log_req(method, url, status, duration_ms, attempt, retried=True)
-                        if attempt < self._cfg.retry_max:
-                            await asyncio.sleep(self._backoff(attempt))
-                            attempt += 1
-                            continue
-                        resp.release()
-                        raise aiohttp.ClientResponseError(resp.request_info, resp.history, status=status, message=body)
-                    self._log_req(method, url, status, duration_ms, attempt, retried=False)
-                    return resp
+                resp = await self._session.request(method, url, params=params, json=json, headers=headers)
+                duration_ms = int((time.time() - t0) * 1000)
+                status = resp.status
+                # Retry on 429/5xx for idempotent methods
+                if method.upper() in allow_retry_on_methods and status in (429, 500, 502, 503, 504):
+                    body = await resp.text()
+                    self._log_req(method, url, status, duration_ms, attempt, retried=True)
+                    resp.release()
+                    if attempt < self._cfg.retry_max:
+                        await asyncio.sleep(self._backoff(attempt))
+                        attempt += 1
+                        continue
+                    raise aiohttp.ClientResponseError(resp.request_info, resp.history, status=status, message=body)
+                self._log_req(method, url, status, duration_ms, attempt, retried=False)
+                return resp
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 last_exc = e
                 retriable = method.upper() in allow_retry_on_methods
