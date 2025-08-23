@@ -41,36 +41,29 @@ def make_search_plex(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
         
         settings = load_settings(project_root)
         plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-
-        # Get all movies if no query, otherwise search (run blocking plexapi calls in a thread)
-        if query:
-            results = await asyncio.to_thread(plex.search_movies, query, response_level)
-        else:
-            def _fetch_all_movies():
-                movie_library = plex.get_movie_library()
-                items = movie_library.all()
-                return plex._serialize_items(items, response_level)
-            results = await asyncio.to_thread(_fetch_all_movies)
         
-        # Apply filters (only if we have detailed data)
-        if response_level in [ResponseLevel.STANDARD, ResponseLevel.DETAILED]:
-            filtered_results = []
-            for movie in results:
-                if _matches_filters(movie, year_min, year_max, genres, actors, directors, 
-                                  content_rating, rating_min, rating_max):
-                    filtered_results.append(movie)
-            results = filtered_results
-            
-            # Sort results
-            results = _sort_movies(results, sort_by, sort_order)
-        
-        # Apply limit
-        results = results[:limit]
+        # Always perform server-side filtered search via section.search where possible
+        results = await asyncio.to_thread(
+            plex.search_movies_filtered,
+            query or None,
+            year_min=year_min,
+            year_max=year_max,
+            genres=genres,
+            actors=actors,
+            directors=directors,
+            content_rating=content_rating,
+            rating_min=rating_min,
+            rating_max=rating_max,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=limit,
+            response_level=response_level,
+        )
         
         return {
             "items": results,
             "total_found": len(results),
-            "filters_applied": filters if response_level in [ResponseLevel.STANDARD, ResponseLevel.DETAILED] else None,
+            "filters_applied": filters,
             "query": query,
             "response_level": response_level.value if response_level else "compact"
         }

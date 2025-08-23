@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, List, Dict, Optional, Literal
+from typing import Any, List, Dict, Optional, Literal, Set
 from urllib.parse import urlparse
 from enum import Enum
 
@@ -110,6 +110,133 @@ class PlexClient:
         results = self.plex.search(query)
         return self._serialize_items(results, response_level)
 
+    # Advanced, server-side filtered movie search
+    def _map_sort_key(self, sort_by: Optional[str]) -> str:
+        mapping = {
+            "title": "titleSort",
+            "year": "year",
+            "rating": "rating",
+            "content_rating": "contentRating",
+            "duration": "duration",
+            "added": "addedAt",
+            "addedAt": "addedAt",
+            "lastViewed": "lastViewedAt",
+            "lastViewedAt": "lastViewedAt",
+        }
+        return mapping.get((sort_by or "title").strip(), "titleSort")
+
+    def search_movies_filtered(
+        self,
+        title: Optional[str] = None,
+        *,
+        year_min: Optional[int] = None,
+        year_max: Optional[int] = None,
+        genres: Optional[List[str]] = None,
+        actors: Optional[List[str]] = None,
+        directors: Optional[List[str]] = None,
+        content_rating: Optional[str] = None,
+        rating_min: Optional[float] = None,
+        rating_max: Optional[float] = None,
+        sort_by: Optional[str] = "title",
+        sort_order: Optional[str] = "asc",
+        limit: int = 20,
+        response_level: Optional[ResponseLevel] = None,
+    ) -> List[Dict[str, Any]]:
+        """Perform server-side Plex search with filters and inclusive bounds.
+
+        - If year_min == year_max, performs exact-year filtering.
+        - Multiple values within a category (genres/actors/directors) are OR'ed server-side via
+          multiple filtered calls and union within the category, then AND'ed across categories
+          via set intersection to minimize client-side work while keeping filtering on server.
+        - Sorting and limiting are applied on the server when possible.
+        """
+        section = self.get_movie_library()
+
+        # Build base filters
+        base_kwargs: Dict[str, Any] = {}
+        if title:
+            base_kwargs["title"] = title
+        if year_min is not None and year_max is not None and int(year_min) == int(year_max):
+            base_kwargs["year"] = int(year_min)
+        else:
+            if year_min is not None:
+                base_kwargs["year__gte"] = int(year_min)
+            if year_max is not None:
+                base_kwargs["year__lte"] = int(year_max)
+        if content_rating:
+            base_kwargs["contentRating"] = content_rating
+        if rating_min is not None:
+            base_kwargs["rating__gte"] = float(rating_min)
+        if rating_max is not None:
+            base_kwargs["rating__lte"] = float(rating_max)
+
+        sort_key = self._map_sort_key(sort_by)
+        direction = "asc" if str(sort_order or "asc").lower() == "asc" else "desc"
+        sort_param = f"{sort_key}:{direction}"
+
+        # Normalize lists
+        genres = [g for g in (genres or []) if str(g).strip()]
+        actors = [a for a in (actors or []) if str(a).strip()]
+        directors = [d for d in (directors or []) if str(d).strip()]
+
+        list_filters: List[tuple[str, List[str]]] = []
+        if genres:
+            list_filters.append(("genre", genres))
+        if actors:
+            list_filters.append(("actor", actors))
+        if directors:
+            list_filters.append(("director", directors))
+
+        items: List[Any] = []
+        # If there are no list-type filters, do a single filtered search
+        if not list_filters:
+            try:
+                items = section.search(maxresults=limit, sort=sort_param, **base_kwargs)
+            except Exception:
+                # Fallback: minimal search by title only
+                fallback_kwargs = {k: v for k, v in base_kwargs.items() if k == "title"}
+                try:
+                    items = section.search(maxresults=limit, sort=sort_param, **fallback_kwargs)
+                except Exception:
+                    items = []
+        else:
+            # Perform OR within each category and AND across categories via set intersection
+            current_ids: Optional[Set[Any]] = None
+            id_to_item: Dict[Any, Any] = {}
+            for key, values in list_filters:
+                category_union: Set[Any] = set()
+                category_map: Dict[Any, Any] = {}
+                for val in values:
+                    try:
+                        res = section.search(maxresults=limit, sort=sort_param, **base_kwargs, **{key: val})
+                    except Exception:
+                        res = []
+                    for it in res:
+                        rk = getattr(it, "ratingKey", None)
+                        if rk is not None:
+                            category_union.add(rk)
+                            category_map[rk] = it
+                if current_ids is None:
+                    current_ids = category_union
+                else:
+                    current_ids = current_ids.intersection(category_union)
+                id_to_item.update(category_map)
+                if not current_ids:
+                    break
+
+            if current_ids:
+                items = [id_to_item[rk] for rk in current_ids if rk in id_to_item]
+                # Ensure deterministic ordering client-side if needed
+                try:
+                    items.sort(key=lambda x: getattr(x, sort_key, getattr(x, "title", "")), reverse=(direction == "desc"))
+                except Exception:
+                    items.sort(key=lambda x: getattr(x, "title", ""), reverse=(direction == "desc"))
+                items = items[:limit]
+            else:
+                items = []
+
+        return self._serialize_items(items, response_level)
+
     # Convenience methods for minimal context usage
     def get_minimal_library_overview(self) -> Dict[str, Any]:
         """Get minimal library overview for quick status checks."""
@@ -156,12 +283,14 @@ class PlexClient:
         return sections
 
     def get_movie_library(self) -> MovieSection:
-        """Get the movie library section."""
-        return self.plex.library.section("Movies")
+        """Get the movie library section (resolves actual section title)."""
+        section_name = self._get_section_title("movie")
+        return self.plex.library.section(section_name)
 
     def get_tv_library(self) -> ShowSection:
-        """Get the TV shows library section."""
-        return self.plex.library.section("TV Shows")
+        """Get the TV shows library section (resolves actual section title)."""
+        section_name = self._get_section_title("show")
+        return self.plex.library.section(section_name)
 
     def get_recently_added(self, section_type: str = "movie", limit: int = 20, response_level: Optional[ResponseLevel] = None) -> List[Dict[str, Any]]:
         """Get recently added items from specified library."""
