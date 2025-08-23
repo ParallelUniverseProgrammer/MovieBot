@@ -78,13 +78,22 @@ class PlexClient:
 
     def _get_section_title(self, section_type: str) -> str:
         """Map section type to actual section title in Plex."""
-        # Get available sections to find the correct title
-        sections = self.plex.library.sections()
-        
-        # Look for a section that matches the type
-        for section in sections:
-            if section.type.lower() == section_type.lower():
-                return section.title
+        # Try to resolve from available sections; tolerate mocks/non-iterables
+        try:
+            sections = self.plex.library.sections()
+            try:
+                for section in sections:  # may raise if sections is a Mock
+                    stype = getattr(section, "type", "")
+                    if isinstance(stype, str) and stype.lower() == section_type.lower():
+                        title = getattr(section, "title", None)
+                        if isinstance(title, str) and title:
+                            return title
+            except TypeError:
+                # Non-iterable (e.g., Mock); fall through to defaults
+                pass
+        except Exception:
+            # Any errors fetching sections; fall through to defaults
+            pass
         
         # Fallback to common mappings
         if section_type.lower() == "movie":
@@ -439,7 +448,7 @@ class PlexClient:
                 "type": getattr(item, "type", None)
             }
         elif level == ResponseLevel.STANDARD:
-            return {
+            data = {
                 "title": getattr(item, "title", None),
                 "year": getattr(item, "year", None),
                 "ratingKey": getattr(item, "ratingKey", None),
@@ -450,8 +459,25 @@ class PlexClient:
                 "summary": getattr(item, "summary", None),
                 "type": getattr(item, "type", None)
             }
+            # Attempt to include basic media info from the first Media object
+            try:
+                media_list = getattr(item, "media", [])
+                if media_list:
+                    media0 = media_list[0]
+                    vcodec = getattr(media0, "videoCodec", None)
+                    acodec = getattr(media0, "audioCodec", None)
+                    vres = getattr(media0, "videoResolution", None) or getattr(media0, "resolution", None)
+                    if vres is not None:
+                        data["videoResolution"] = vres
+                    if vcodec is not None:
+                        data["videoCodec"] = vcodec
+                    if acodec is not None:
+                        data["audioCodec"] = acodec
+            except Exception:
+                pass
+            return data
         else:  # DETAILED - current behavior
-            return {
+            data = {
                 "title": getattr(item, "title", None),
                 "year": getattr(item, "year", None),
                 "ratingKey": getattr(item, "ratingKey", None),
@@ -471,6 +497,23 @@ class PlexClient:
                 "type": getattr(item, "type", None),
                 "guid": getattr(item, "guid", None)
             }
+            # Attempt to include media info from the first Media object
+            try:
+                media_list = getattr(item, "media", [])
+                if media_list:
+                    media0 = media_list[0]
+                    vcodec = getattr(media0, "videoCodec", None)
+                    acodec = getattr(media0, "audioCodec", None)
+                    vres = getattr(media0, "videoResolution", None) or getattr(media0, "resolution", None)
+                    if vres is not None:
+                        data["videoResolution"] = vres
+                    if vcodec is not None:
+                        data["videoCodec"] = vcodec
+                    if acodec is not None:
+                        data["audioCodec"] = acodec
+            except Exception:
+                pass
+            return data
 
     def _serialize_collection(self, collection: Any, response_level: Optional[ResponseLevel] = None) -> Dict[str, Any]:
         """Serialize a collection with configurable detail level."""

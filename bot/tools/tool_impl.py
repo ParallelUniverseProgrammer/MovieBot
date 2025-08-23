@@ -82,6 +82,8 @@ def _parse_plex_xml_videos(xml_text: str, response_level: ResponseLevel | None) 
 
         # Try to infer resolution/HDR from attributes across nodes
         video_resolution = v.get('videoResolution') or v.get('resolution')
+        video_codec: str | None = None
+        audio_codec: str | None = None
         has_hdr = False
 
         # Helper to coerce numeric values safely
@@ -97,6 +99,10 @@ def _parse_plex_xml_videos(xml_text: str, response_level: ResponseLevel | None) 
         for m in v.findall('Media'):
             if not video_resolution:
                 video_resolution = m.get('videoResolution') or m.get('resolution')
+            if not video_codec:
+                video_codec = m.get('videoCodec')
+            if not audio_codec:
+                audio_codec = m.get('audioCodec')
             # Infer from width/height if needed
             if not video_resolution:
                 width = _as_int(m.get('width'))
@@ -131,6 +137,10 @@ def _parse_plex_xml_videos(xml_text: str, response_level: ResponseLevel | None) 
         if response_level in [ResponseLevel.STANDARD, ResponseLevel.DETAILED, None]:
             item['videoResolution'] = video_resolution
             item['hasHDR'] = has_hdr
+            if video_codec:
+                item['videoCodec'] = video_codec
+            if audio_codec:
+                item['audioCodec'] = audio_codec
         items.append(item)
     return items
 

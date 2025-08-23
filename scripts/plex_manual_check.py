@@ -7,6 +7,14 @@ from typing import Any
 from dotenv import load_dotenv
 
 from integrations.plex_client import PlexClient, ResponseLevel
+from bot.tools.tool_impl import (
+    make_get_plex_library_sections,
+    make_get_plex_recently_added,
+    make_get_plex_unwatched,
+    make_get_plex_on_deck,
+    make_search_plex,
+    make_get_plex_item_details,
+)
 from config.loader import load_settings
 
 
@@ -21,6 +29,9 @@ def _print_items(items: list[dict[str, Any]], limit: int = 10) -> None:
         rating = it.get("rating")
         rating_key = it.get("ratingKey")
         media_type = it.get("type")
+        vres = it.get("videoResolution") or it.get("resolution")
+        vcodec = it.get("videoCodec")
+        acodec = it.get("audioCodec")
         bits = [str(title) if title is not None else "(no title)"]
         if year:
             bits.append(str(year))
@@ -30,7 +41,27 @@ def _print_items(items: list[dict[str, Any]], limit: int = 10) -> None:
             bits.append(f"type={media_type}")
         if rating_key is not None:
             bits.append(f"key={rating_key}")
+        codecs_bits = []
+        if vres:
+            codecs_bits.append(str(vres))
+        if vcodec:
+            codecs_bits.append(str(vcodec))
+        if acodec:
+            codecs_bits.append(str(acodec))
+        if codecs_bits:
+            bits.append("/".join(codecs_bits))
         print(f"{i:02d}. " + " | ".join(bits))
+
+
+def _print_likely_matches(items: list[dict[str, Any]], needle: str, *, limit: int = 10) -> None:
+    """Highlight items whose title contains the given substring (case-insensitive)."""
+    n = needle.lower().strip()
+    if not n:
+        return
+    matches = [it for it in items if n in str(it.get("title") or "").lower()]
+    if matches:
+        print(f"\nLIKELY MATCHES for '{needle}':")
+        _print_items(matches, limit=limit)
 
 
 def _filter_items(
@@ -100,40 +131,102 @@ def main() -> int:
     print(f"Connecting to Plex at {plex_url}...")
     plex = PlexClient(plex_url, plex_token, default_response_level=ResponseLevel.COMPACT)
 
+    # Build tool callables exactly like the agent uses
+    tool_get_sections = make_get_plex_library_sections(project_root)
+    tool_recent = make_get_plex_recently_added(project_root)
+    tool_unwatched = make_get_plex_unwatched(project_root)
+    tool_on_deck = make_get_plex_on_deck(project_root)
+    tool_search = make_search_plex(project_root)
+    tool_details = make_get_plex_item_details(project_root)
+
     _print_section("Quick status")
     print(plex.get_quick_status())
 
     _print_section("Library sections")
-    sections = plex.get_library_sections()
+    sections_res = asyncio.run(tool_get_sections({}))
+    sections = sections_res.get("sections", {})
     for name, info in sections.items():
         print(f"- {name}: type={info.get('type')} count={info.get('count')} id={info.get('section_id')}")
 
     _print_section("Search movies: 'inception'")
-    movies = plex.search_movies("inception", response_level=ResponseLevel.STANDARD)
+    movies_res = asyncio.run(tool_search({
+        "query": "inception",
+        "limit": 10,
+        "response_level": "standard",
+        "filters": {
+            "sort_by": "title",
+            "sort_order": "asc"
+        }
+    }))
+    movies = movies_res.get("items", [])
     _print_items(movies)
 
     _print_section("Search shows: 'office'")
-    shows = plex.search_shows("office", response_level=ResponseLevel.STANDARD)
+    shows = []  # search_shows not exposed as a tool; keep as PlexClient direct call if needed
     _print_items(shows)
 
+    # Targeted checks for user's known titles
+    _print_section("Search movies: 'Pirates of the Caribbean' (+ common misspelling)")
+    pirates_movies = asyncio.run(tool_search({
+        "query": "pirates of the caribbean",
+        "limit": 10,
+        "response_level": "standard"
+    })).get("items", [])
+    pirates_movies_misspell = asyncio.run(tool_search({
+        "query": "pirates of the carribean",
+        "limit": 10,
+        "response_level": "standard"
+    })).get("items", [])
+    _print_items(pirates_movies or [])
+    _print_items(pirates_movies_misspell or [])
+    # Broader sweep to catch partial titles
+    pirates_all = plex.search_all("pirates", response_level=ResponseLevel.COMPACT)
+    _print_likely_matches(pirates_all, "pirates")
+
+    _print_section("Search shows: 'Samurai Flamenco'")
+    samurai_shows = plex.search_shows("samurai flamenco", response_level=ResponseLevel.STANDARD)
+    _print_items(samurai_shows or [])
+    # Broader sweep across all media
+    samurai_all = plex.search_all("samurai flamenco", response_level=ResponseLevel.COMPACT)
+    _print_likely_matches(samurai_all, "samurai flamenco")
+
     _print_section("Recently added (Movies)")
-    recent_movies = plex.get_recently_added("movie", limit=10, response_level=ResponseLevel.COMPACT)
+    recent_movies = asyncio.run(tool_recent({
+        "section_type": "movie",
+        "limit": 10,
+        "response_level": "compact"
+    })).get("items", [])
     _print_items(recent_movies)
 
     _print_section("Recently added (Shows)")
-    recent_shows = plex.get_recently_added("show", limit=10, response_level=ResponseLevel.COMPACT)
+    recent_shows = asyncio.run(tool_recent({
+        "section_type": "show",
+        "limit": 10,
+        "response_level": "compact"
+    })).get("items", [])
     _print_items(recent_shows)
 
     _print_section("On deck")
-    on_deck = plex.get_on_deck(limit=10, response_level=ResponseLevel.COMPACT)
+    on_deck = asyncio.run(tool_on_deck({
+        "limit": 10,
+        "response_level": "compact"
+    })).get("items", [])
     _print_items(on_deck)
 
     _print_section("Unwatched (Movies)")
-    unwatched_movies = plex.get_unwatched("movie", limit=10, response_level=ResponseLevel.COMPACT)
+    unwatched_movies = asyncio.run(tool_unwatched({
+        "section_type": "movie",
+        "limit": 10,
+        "response_level": "compact"
+    })).get("items", [])
     _print_items(unwatched_movies)
 
     _print_section("Unwatched (Shows)")
-    unwatched_shows = plex.get_unwatched("show", limit=10, response_level=ResponseLevel.COMPACT)
+    unwatched_shows = asyncio.run(tool_unwatched({
+        "section_type": "show",
+        "limit": 10,
+        "response_level": "compact"
+    })).get("items", [])
     _print_items(unwatched_shows)
 
     # Filtered examples using full library listings (to avoid relying on Plex search)
@@ -181,10 +274,14 @@ def main() -> int:
         rk = first[0].get("ratingKey")
         if rk:
             _print_section(f"Item details for ratingKey={rk}")
-            details = plex.get_item_details(int(rk), response_level=ResponseLevel.DETAILED)
+            details_res = asyncio.run(tool_details({
+                "rating_key": int(rk),
+                "response_level": "detailed"
+            }))
+            details = details_res.get("item")
             if details:
                 # Print a concise subset
-                subset = {k: details.get(k) for k in ("title", "year", "rating", "genres", "summary", "type", "ratingKey")}
+                subset = {k: details.get(k) for k in ("title", "year", "rating", "genres", "summary", "type", "ratingKey", "videoResolution", "videoCodec", "audioCodec")}
                 print(subset)
 
     print("\n✅ Done.")
