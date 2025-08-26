@@ -325,6 +325,14 @@ class MovieBotClient(discord.Client):
                 if re.search(r"\b" + re.escape(term) + r"\b", s_lo):
                     return False
 
+            # Heuristic: treat "Title (Year)" patterns as actionable (e.g., add/search), not quick path
+            # e.g., "synchronic (2020)", "inception (2010)"
+            try:
+                if re.search(r"\((19|20)\d{2}\)", s, flags=re.IGNORECASE):
+                    return False
+            except Exception:
+                pass
+
             # Greetings / pleasantries / capability queries / style-only asks
             quick_keywords = [
                 "hi", "hello", "hey", "how are you", "what can you do", "help", "capabilities",

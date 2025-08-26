@@ -251,21 +251,9 @@ class Agent:
                     "name": name,
                     "content": json.dumps(payload, separators=(",", ":")),
                 })
-            # Finalization turn after tools: ask model to produce a user-facing reply
-            if self.progress_callback:
-                try:
-                    self.progress_callback("finalizing", "synthesizing reply")
-                except Exception:
-                    pass
-            # Force finalization pass with tool_choice="none" to reduce extra tool turns
-            messages.append({"role": "system", "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."})
-            final_resp = await self._achat_once(messages, model, role, tool_choice_override="none")
-            try:
-                final_tc = getattr(final_resp.choices[0].message, "tool_calls", None)
-            except Exception:
-                final_tc = None
-            if not final_tc:
-                return final_resp
+            # Let the next loop iteration decide whether to call more tools or finalize.
+            # If the model chooses to finalize, it will return a message with no tool_calls
+            # and we will exit early at the top of the next iteration.
         # If we exhausted iterations and still have tool calls requested, synthesize a graceful reply
         synthesized = {
             "choices": [
@@ -572,20 +560,8 @@ class Agent:
                     "name": name,
                     "content": json.dumps(payload, separators=(",", ":")),
                 })
-            # Finalization turn after tools: ask model to produce a user-facing reply
-            if self.progress_callback:
-                try:
-                    self.progress_callback("finalizing", "synthesizing reply")
-                except Exception:
-                    pass
-            messages.append({"role": "system", "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."})
-            final_resp = await self._achat_once(messages, model, role, tool_choice_override="none")
-            try:
-                final_tc = getattr(final_resp.choices[0].message, "tool_calls", None)
-            except Exception:
-                final_tc = None
-            if not final_tc:
-                return final_resp
+            # Allow subsequent iterations to request additional tools after seeing results.
+            # The loop will exit when the model returns a message with no tool_calls.
         # If we exhausted iterations and still have tool calls requested, synthesize a graceful reply
         synthesized = {
             "choices": [
