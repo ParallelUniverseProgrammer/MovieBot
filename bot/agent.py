@@ -315,6 +315,17 @@ class Agent:
             return False
         return False
 
+    def _contains_write_failure(self, flat_results: List[tuple]) -> bool:
+        """Detect if any write-style tool explicitly failed in the last batch."""
+        try:
+            for _tc_id, name, result, _attempts, _cache_hit in flat_results:
+                if self._is_write_tool_name(str(name)) and isinstance(result, dict):
+                    if (result.get("ok") is False) or ("error" in result):
+                        return True
+        except Exception:
+            return False
+        return False
+
     async def _run_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, role: str, max_iters: int | None = None, stream_final_to_callback: Optional[Callable[[str], Any]] = None) -> Any:
         # Sync pathway removed: delegate to async loop for a single implementation.
         return await self._arun_tools_loop(base_messages, model, role, max_iters=max_iters, stream_final_to_callback=stream_final_to_callback)
@@ -418,6 +429,8 @@ class Agent:
         require_validation_read = False
         seen_write_intent = False
         write_completed = False
+        write_failed_once = False
+        allow_finalize_on_failure = False
         validation_done = False
         last_added_tmdb_id: Optional[int] = None
         last_added_title: Optional[str] = None
@@ -1129,8 +1142,22 @@ class Agent:
                 })
             # Post-write validation planning and finalize gating (mirrors sync path)
             write_success = self._contains_write_success(flattened_results)
+            write_failure = self._contains_write_failure(flattened_results)
             if write_success:
                 write_completed = True
+                write_failed_once = False
+                allow_finalize_on_failure = False
+            elif write_failure:
+                write_failed_once = True
+                # Allow one quick diagnostic read-only step, then finalize gracefully
+                allow_finalize_on_failure = True
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "Write attempt failed. Perform at most one quick read-only lookup to diagnose (e.g., radarr_lookup), "
+                        "then finalize with a brief explanation and next steps. Do not perform additional write attempts."
+                    )
+                })
             if write_success and not require_validation_read:
                 require_validation_read = True
                 await self._emit_progress("phase.validation_planned", {"iteration": f"{iter_idx+1}/{iters}"})
@@ -1163,10 +1190,11 @@ class Agent:
                     allowed_to_finalize = self._results_indicate_finalizable(flattened_results)
                     if write_success:
                         allowed_to_finalize = False
-                    if seen_write_intent and not write_success:
-                        allowed_to_finalize = False
-                    if must_write and not write_success:
-                        allowed_to_finalize = False
+                    if not allow_finalize_on_failure:
+                        if seen_write_intent and not write_success:
+                            allowed_to_finalize = False
+                        if must_write and not write_success:
+                            allowed_to_finalize = False
                     if allowed_to_finalize:
                         messages.append({
                             "role": "system",
@@ -1297,9 +1325,9 @@ class Agent:
         """Async version of converse for non-blocking operations."""
         # Choose model from config
         from config.loader import resolve_llm_selection
-        _, sel = resolve_llm_selection(self.project_root, "smart")
-        model = sel.get("model", "gpt-5")
-        return await self._arun_tools_loop(messages, model=model, role="smart", max_iters=None, stream_final_to_callback=stream_final_to_callback)
+        _, sel = resolve_llm_selection(self.project_root, "chat")
+        model = sel.get("model", "gpt-5-mini")
+        return await self._arun_tools_loop(messages, model=model, role="chat", max_iters=None, stream_final_to_callback=stream_final_to_callback)
 
     def recommend(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         # Choose model from config

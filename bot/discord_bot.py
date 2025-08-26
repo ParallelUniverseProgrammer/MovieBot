@@ -437,28 +437,13 @@ class MovieBotClient(discord.Client):
                         # Only start progress updates if we are not using quick path
                         progress_update_task = asyncio.create_task(progress_updater())
                         try:
-                            # Prepare a live message to stream final tokens
-                            stream_msg: discord.Message | None = None
+                            # Buffer streamed chunks internally; do not send partials to the user
                             streamed_text_parts: list[str] = []
 
                             async def _on_stream(chunk: str) -> None:
-                                nonlocal stream_msg, streamed_text_parts
                                 if not chunk:
                                     return
                                 streamed_text_parts.append(chunk)
-                                text_now = "".join(streamed_text_parts)
-                                # Initialize stream message on first chunk
-                                if stream_msg is None:
-                                    try:
-                                        stream_msg = await message.channel.send(text_now[:1900], silent=True)
-                                    except Exception:
-                                        return
-                                else:
-                                    # Update the message with the new text
-                                    try:
-                                        await stream_msg.edit(content=text_now[:1900])
-                                    except Exception:
-                                        pass
 
                             response = await agent.aconverse(history, stream_final_to_callback=_on_stream)
                         except Exception:
@@ -495,16 +480,17 @@ class MovieBotClient(discord.Client):
             if progress_update_task:
                 progress_update_task.cancel()
         
+        # Send final reply first, then delete the progress message
+        CONVERSATIONS.add_assistant(conv_id, text)
+        log.info("assistant reply", extra={"channel_id": conv_id, "content_preview": text[:120]})
+        await message.reply(text[:1900], mention_author=False)
+
         # Delete the progress message if it exists
         if progress_message:
             try:
                 await progress_message.delete()
             except Exception as e:
                 log.warning(f"Failed to delete progress message: {e}")
-        
-        CONVERSATIONS.add_assistant(conv_id, text)
-        log.info("assistant reply", extra={"channel_id": conv_id, "content_preview": text[:120]})
-        await message.reply(text[:1900], mention_author=False)
 
     async def on_message(self, message: discord.Message) -> None:  # type: ignore[override]
         # Ignore bot/self messages

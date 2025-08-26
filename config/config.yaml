@@ -20,13 +20,13 @@ llm:
           tool_choice: auto
       smart:
         model: gpt-5
-        reasoningEffort: minimal
+        reasoningEffort: medium
         params:
           temperature: 1
           tool_choice: auto
       worker:
         model: gpt-5-mini
-        reasoningEffort: low
+        reasoningEffort: medium
         params:
           temperature: 1
           tool_choice: auto
