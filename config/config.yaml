@@ -50,6 +50,29 @@ tools:
   retryMax: 2
   backoffBaseMs: 50
   listMaxItems: 12
+  # Optional advanced tuning (used by Agent if present)
+  familyParallelism:
+    tmdb: 16
+    plex: 4
+    radarr: 6
+    sonarr: 6
+  perFamily:
+    tmdb:
+      timeoutMs: 2500
+    plex:
+      timeoutMs: 6000
+  perTool:
+    tmdb_search:
+      timeoutMs: 2000
+  hedgeDelayMsByFamily:
+    tmdb: 150
+  listMaxItemsByFamily:
+    tmdb: 6
+    plex: 4
+  maxToolMessagesInContext: 12
+  circuit:
+    openAfterFailures: 3
+    openForMs: 3000
 ux:
   progressThresholdMs: 450
   progressUpdateIntervalMs: 700

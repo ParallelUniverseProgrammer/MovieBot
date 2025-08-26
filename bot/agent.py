@@ -6,6 +6,7 @@ import json
 import asyncio
 import logging
 import threading
+import time
 
 from llm.clients import LLMClient
 from .agent_prompt import build_agent_system_prompt
@@ -15,6 +16,7 @@ from config.loader import load_runtime_config
 from .tool_summarizers import summarize_tool_result
 from .tools.result_cache import put_tool_result
 from ux.progress import build_progress_broadcaster
+from integrations.ttl_cache import shared_cache
 
 
 class Agent:
@@ -32,6 +34,101 @@ class Agent:
             self.progress = build_progress_broadcaster(self.project_root, progress_callback)
         except Exception:
             self.progress = None  # Fallback; progress is best-effort
+        # Per-instance caches/state
+        self._role_selection_cache: Dict[str, Dict[str, Any]] = {}
+        self._circuit: Dict[str, Dict[str, int]] = {}
+        self._tuning_cfg: Dict[str, Any] = {}
+
+    def _get_role_selection(self, role: str) -> Dict[str, Any]:
+        """Resolve and cache LLM selection for a role for this Agent instance."""
+        if role in self._role_selection_cache:
+            return self._role_selection_cache[role]
+        from config.loader import resolve_llm_selection
+        _, sel = resolve_llm_selection(self.project_root, role)
+        self._role_selection_cache[role] = sel
+        return sel
+
+    def _classify_tool_family(self, name: str) -> str:
+        n = (name or "").lower()
+        if n.startswith("tmdb_"):
+            return "tmdb"
+        if n.startswith("plex_"):
+            return "plex"
+        if n.startswith("radarr_"):
+            return "radarr"
+        if n.startswith("sonarr_"):
+            return "sonarr"
+        return "other"
+
+    def _select_tool_tuning(self, name: str) -> Dict[str, int]:
+        """Pick timeout/retry/backoff/hedge delay using per-tool or per-family overrides."""
+        tools_cfg = self._tuning_cfg.get("tools", {}) or self._tuning_cfg.get("tools_cfg", {}) or {}
+        family = self._classify_tool_family(name)
+        default_timeout = int(tools_cfg.get("timeoutMs", 8000))
+        default_retry = int(tools_cfg.get("retryMax", 2))
+        default_backoff = int(tools_cfg.get("backoffBaseMs", 200))
+        hedge_by_family = (tools_cfg.get("hedgeDelayMsByFamily", {}) or {})
+        per_tool = (tools_cfg.get("perTool", {}) or {})
+        per_family = (tools_cfg.get("perFamily", {}) or {})
+        cfg = {
+            "timeoutMs": int(per_tool.get(name, {}).get("timeoutMs", per_family.get(family, {}).get("timeoutMs", default_timeout))),
+            "retryMax": int(per_tool.get(name, {}).get("retryMax", per_family.get(family, {}).get("retryMax", default_retry))),
+            "backoffBaseMs": int(per_tool.get(name, {}).get("backoffBaseMs", per_family.get(family, {}).get("backoffBaseMs", default_backoff))),
+            "hedgeDelayMs": int(hedge_by_family.get(family, 0)),
+        }
+        return cfg
+
+    def _select_parallelism_for_family(self, family: str) -> int:
+        tools_cfg = self._tuning_cfg.get("tools", {}) or self._tuning_cfg.get("tools_cfg", {}) or {}
+        default_parallelism = int(tools_cfg.get("parallelism", 4))
+        family_parallelism = (tools_cfg.get("familyParallelism", {}) or {})
+        return int(family_parallelism.get(family, default_parallelism))
+
+    def _normalize_args_for_dedup(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize common query-like args so near-duplicates dedup nicely."""
+        try:
+            out = dict(args)
+            for key in ("query", "q", "title", "name"):
+                if key in out and isinstance(out[key], str):
+                    out[key] = out[key].strip().lower()
+            return out
+        except Exception:
+            return args
+
+    def _repair_json(self, s: str) -> Optional[Dict[str, Any]]:
+        """Attempt a quick, safe repair of slightly malformed JSON tool args."""
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+        try:
+            fixed = s.strip()
+            # Replace single quotes with double quotes if appears to be JSON-ish
+            if fixed and fixed[0] in "{'\"":
+                fixed = fixed.replace("'", '"')
+            # Remove trailing commas before } or ]
+            fixed = fixed.replace(",\n}", "\n}").replace(",}\n", "}\n").replace(", ]", "]")
+            return json.loads(fixed)
+        except Exception:
+            return None
+
+    def _prune_old_tool_messages(self, messages: List[Dict[str, Any]], max_tool_messages: int) -> None:
+        """Keep only the most recent N tool messages to control context growth."""
+        try:
+            indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+            if len(indices) <= max_tool_messages:
+                return
+            # Remove oldest tool messages beyond the cap
+            to_remove = indices[: len(indices) - max_tool_messages]
+            removed_count = len(to_remove)
+            for idx in reversed(to_remove):
+                messages.pop(idx)
+            messages.append({
+                "role": "system",
+                "content": f"Older tool outputs pruned to reduce context. Pruned_count={removed_count}."
+            })
+        except Exception:
+            return
 
     async def _emit_progress(self, event: str, data: Any) -> None:
         try:
@@ -44,13 +141,13 @@ class Agent:
             pass
 
     def _chat_once(self, messages: List[Dict[str, Any]], model: str, role: str, tool_choice_override: Optional[str] = None) -> Any:
-        self.log.debug("LLM.chat start", extra={
-            "model": model,
-            "message_count": len(messages),
-        })
+        if self.log.isEnabledFor(logging.DEBUG):
+            self.log.debug("LLM.chat start", extra={
+                "model": model,
+                "message_count": len(messages),
+            })
         # Pull optional reasoningEffort/params for role from config
-        from config.loader import resolve_llm_selection
-        _, sel = resolve_llm_selection(self.project_root, role)
+        sel = self._get_role_selection(role)
         params = dict(sel.get("params", {}))
         # gpt-5 family requires temperature exactly 1
         params["temperature"] = 1
@@ -60,7 +157,7 @@ class Agent:
         resp = self.llm.chat(
             model=model,
             messages=messages,
-            tools=self.openai_tools,
+            tools=None if tool_choice_value == "none" else self.openai_tools,
             reasoning=sel.get("reasoningEffort"),
             **params,
         )
@@ -69,18 +166,20 @@ class Agent:
             content_preview = (resp.choices[0].message.content or "")[:120]  # type: ignore[attr-defined]
         except Exception:
             content_preview = "<no content>"
-        self.log.debug("LLM.chat done", extra={
-            "tool_calls": bool(getattr(getattr(resp.choices[0], 'message', {}), 'tool_calls', None)),  # type: ignore[attr-defined]
-            "content_preview": content_preview,
-        })
+        if self.log.isEnabledFor(logging.DEBUG):
+            self.log.debug("LLM.chat done", extra={
+                "tool_calls": bool(getattr(getattr(resp.choices[0], 'message', {}), 'tool_calls', None)),  # type: ignore[attr-defined]
+                "content_preview": content_preview,
+            })
         return resp
 
     async def _achat_once(self, messages: List[Dict[str, Any]], model: str, role: str, tool_choice_override: Optional[str] = None) -> Any:
         """Async version of _chat_once for non-blocking LLM calls."""
-        self.log.debug("LLM.achat start", extra={
-            "model": model,
-            "message_count": len(messages),
-        })
+        if self.log.isEnabledFor(logging.DEBUG):
+            self.log.debug("LLM.achat start", extra={
+                "model": model,
+                "message_count": len(messages),
+            })
         await self._emit_progress("llm.start", {"model": model, "messages": len(messages)})
         if getattr(self, "progress", None) is not None:
             try:
@@ -88,8 +187,7 @@ class Agent:
             except Exception:
                 pass
         if hasattr(self.llm, "achat"):
-            from config.loader import resolve_llm_selection
-            _, sel = resolve_llm_selection(self.project_root, role)
+            sel = self._get_role_selection(role)
             params = dict(sel.get("params", {}))
             params["temperature"] = 1
             tool_choice_value = tool_choice_override if tool_choice_override is not None else params.pop("tool_choice", "auto")
@@ -97,15 +195,14 @@ class Agent:
             resp = await self.llm.achat(
                 model=model,
                 messages=messages,
-                tools=self.openai_tools,
+                tools=None if tool_choice_value == "none" else self.openai_tools,
                 reasoning=sel.get("reasoningEffort"),
                 **params,
             )
         else:
             # Fallback: run sync client.chat in a thread to avoid blocking the event loop
             import functools
-            from config.loader import resolve_llm_selection
-            _, sel = resolve_llm_selection(self.project_root, role)
+            sel = self._get_role_selection(role)
             params = dict(sel.get("params", {}))
             params["temperature"] = 1
             tool_choice_value = tool_choice_override if tool_choice_override is not None else params.pop("tool_choice", "auto")
@@ -114,7 +211,7 @@ class Agent:
                 self.llm.chat,
                 model=model,
                 messages=messages,
-                tools=self.openai_tools,
+                tools=None if tool_choice_value == "none" else self.openai_tools,
                 reasoning=sel.get("reasoningEffort"),
                 **params,
             )
@@ -124,10 +221,11 @@ class Agent:
             content_preview = (resp.choices[0].message.content or "")[:120]  # type: ignore[attr-defined]
         except Exception:
             content_preview = "<no content>"
-        self.log.debug("LLM.achat done", extra={
-            "tool_calls": bool(getattr(getattr(resp.choices[0], 'message', {}), 'tool_calls', None)),  # type: ignore[attr-defined]
-            "content_preview": content_preview,
-        })
+        if self.log.isEnabledFor(logging.DEBUG):
+            self.log.debug("LLM.achat done", extra={
+                "tool_calls": bool(getattr(getattr(resp.choices[0], 'message', {}), 'tool_calls', None)),  # type: ignore[attr-defined]
+                "content_preview": content_preview,
+            })
         if getattr(self, "progress", None) is not None:
             try:
                 await self.progress.typing_stop("llm")
@@ -257,6 +355,15 @@ class Agent:
         messages += base_messages
         # Deduplicate identical tool calls within a run to reduce latency
         dedup_cache: Dict[str, Any] = {}
+        # Per-run tuning snapshot
+        self._tuning_cfg = {
+            "tools": rc.get("tools", {}) or {},
+            "tools_cfg": rc.get("tools", {}) or {},
+            "cache_ttl_short": int(rc.get("cache", {}).get("ttlShortSec", 60)),
+            "cache_ttl_medium": int(rc.get("cache", {}).get("ttlMediumSec", rc.get("cache", {}).get("ttlShortSec", 60))),
+            "list_max_default": int((rc.get("tools", {}) or {}).get("listMaxItems", 5)),
+            "max_tool_msgs": int((rc.get("tools", {}) or {}).get("maxToolMessagesInContext", 12)),
+        }
         last_response: Any = None
         force_finalize_next = False
         next_tool_choice_override: Optional[str] = None
@@ -288,20 +395,12 @@ class Agent:
                 if ro_calls:
                     tool_calls = ro_calls
                 await self._emit_progress("phase.validation", {"iteration": f"{iter_idx+1}/{iters}"})
-                messages.append({
-                    "role": "system",
-                    "content": "Validation step: perform read-only checks to confirm earlier writes. Do not perform write operations now."
-                })
             elif not write_phase_allowed:
                 ro_calls = [tc for tc in tool_calls if not self._is_write_tool_name(getattr(getattr(tc, 'function', None), 'name', ''))]
                 if ro_calls:
                     tool_calls = ro_calls
                     write_phase_allowed = True
                     await self._emit_progress("phase.read_only", {"iteration": f"{iter_idx+1}/{iters}"})
-                    messages.append({
-                        "role": "system",
-                        "content": "Phase 1 (read-only): gather information and identify exact targets. Do not perform write operations yet."
-                    })
                 else:
                     write_phase_allowed = True
                     await self._emit_progress("phase.write_enabled", {"iteration": f"{iter_idx+1}/{iters}"})
@@ -309,7 +408,8 @@ class Agent:
             # Append assistant message that contains tool calls
             messages.append({
                 "role": "assistant",
-                "content": msg.content or "",
+                # Do not echo planning text back to the model on tool-call turns
+                "content": "",
                 "tool_calls": [
                     {
                         "id": tc.id,
@@ -319,13 +419,6 @@ class Agent:
                     for tc in tool_calls
                 ],
             })
-            # Execute tool calls concurrently with bounded parallelism and batching
-            rc = load_runtime_config(self.project_root)
-            timeout_ms = int(rc.get("tools", {}).get("timeoutMs", 8000))
-            parallelism = int(rc.get("tools", {}).get("parallelism", 4))
-            retry_max = int(rc.get("tools", {}).get("retryMax", 2))
-            backoff_base_ms = int(rc.get("tools", {}).get("backoffBaseMs", 200))
-
             # Group tool calls by type for potential batching
             tool_groups = self._group_tool_calls_for_batching(tool_calls)
             
@@ -337,15 +430,14 @@ class Agent:
                     # Single tool execution
                     return await self._execute_single_tool(tc_or_group, timeout_ms, retry_max, backoff_base_ms, dedup_cache)
 
-            # Run with bounded concurrency
-            sem = asyncio.Semaphore(parallelism)
+            # Default tuning values from config snapshot
+            cfg_tools = self._tuning_cfg.get("tools_cfg", {}) or {}
+            timeout_ms = int(cfg_tools.get("timeoutMs", 8000))
+            retry_max = int(cfg_tools.get("retryMax", 2))
+            backoff_base_ms = int(cfg_tools.get("backoffBaseMs", 200))
 
-            async def sem_wrapped(tc_or_group):
-                async with sem:
-                    return await run_one_or_batch(tc_or_group)
-
-            # Execute all tools (single or batched) concurrently
-            results = await asyncio.gather(*[sem_wrapped(tc_or_group) for tc_or_group in tool_groups])
+            # Execute all tools (single or batched) concurrently (per-batch limits applied inside)
+            results = await asyncio.gather(*[run_one_or_batch(tc_or_group) for tc_or_group in tool_groups])
             
             # Flatten results from batched executions
             flattened_results = []
@@ -355,8 +447,8 @@ class Agent:
                 else:
                     flattened_results.append(result)
             # Determine max items to keep in summaries and cache TTL
-            list_max_items = int(rc.get("tools", {}).get("listMaxItems", 5))
-            cache_ttl_sec = int(rc.get("cache", {}).get("ttlShortSec", 60))
+            list_max_default = int(self._tuning_cfg.get("list_max_default", 5))
+            cache_ttl_sec = int(self._tuning_cfg.get("cache_ttl_short", 60))
             for tool_call_id, name, result, attempts, cache_hit in flattened_results:
                 # Store raw result and attach ref_id for on-demand detail fetching
                 ref_id = None
@@ -369,6 +461,9 @@ class Agent:
                 try:
                     # If result set is very small (<=2), preserve raw fields (truncated) instead of lossy summary
                     preserved = self._preserve_raw_if_small(result, max_keep=2)
+                    fam = self._classify_tool_family(name)
+                    fam_budgets = (self._tuning_cfg.get("tools_cfg", {}).get("listMaxItemsByFamily", {}) or {})
+                    list_max_items = int(fam_budgets.get(fam, list_max_default))
                     summarized = preserved if preserved is not None else summarize_tool_result(name, result, max_items=list_max_items)
                 except Exception:
                     summarized = result
@@ -380,6 +475,8 @@ class Agent:
                     "name": name,
                     "content": json.dumps(payload, separators=(",", ":")),
                 })
+            # Prune older tool messages to keep context small
+            self._prune_old_tool_messages(messages, int(self._tuning_cfg.get("max_tool_msgs", 12)))
             # Post-write validation planning and finalize gating
             write_success = self._contains_write_success(flattened_results)
             if write_success and not require_validation_read:
@@ -406,19 +503,20 @@ class Agent:
                         })
                         if stream_final_to_callback is not None:
                             try:
-                                from config.loader import resolve_llm_selection
-                                _, sel = resolve_llm_selection(self.project_root, role)
+                                sel = self._get_role_selection(role)
                                 params = dict(sel.get("params", {}))
                                 params["temperature"] = 1
+                                final_text_parts: List[str] = []
                                 async for chunk in self.llm.astream_chat(
                                     model=model,
                                     messages=messages,
-                                    tools=self.openai_tools,
+                                    tools=None,
                                     reasoning=sel.get("reasoningEffort"),
                                     tool_choice="none",
                                     **params,
                                 ):
                                     try:
+                                        final_text_parts.append(chunk)
                                         await stream_final_to_callback(chunk)
                                     except Exception:
                                         pass
@@ -428,7 +526,14 @@ class Agent:
                                 except Exception:
                                     pass
                                 await self._emit_progress("agent.finish", {"reason": "final_answer"})
-                                return await self._achat_once(messages, model, role, tool_choice_override="none")
+                                final_text = "".join(final_text_parts) if final_text_parts else ""
+                                return {
+                                    "choices": [
+                                        {
+                                            "message": {"content": final_text}
+                                        }
+                                    ]
+                                }
                             except Exception:
                                 force_finalize_next = True
                         else:
@@ -523,7 +628,10 @@ class Agent:
         return first_name in batchable_tools
 
     async def _execute_single_tool(self, tc: Any, timeout_ms: int, retry_max: int, backoff_base_ms: int, dedup_cache: Optional[Dict[str, Any]] = None) -> tuple:
-        """Execute a single tool with retries and timing. Includes in-run de-duplication."""
+        """Execute a single tool with retries and timing. Includes in-run de-duplication.
+
+        Note: This signature is kept for backward-compat with existing call sites but internal tuning may override these values.
+        """
         name = tc.function.name
         args_json = tc.function.arguments or "{}"
         self.log.info(f"tool call requested: {name}")
@@ -553,10 +661,14 @@ class Agent:
 
         # Execute with retries/backoff, timeout, and timing
         attempt = 0
-        import time
         start = time.monotonic()
         cache_hit = False
         last_err = None
+        tuning = self._select_tool_tuning(name)
+        timeout_ms = int(tuning.get("timeoutMs", timeout_ms))
+        retry_max = int(tuning.get("retryMax", retry_max))
+        backoff_base_ms = int(tuning.get("backoffBaseMs", backoff_base_ms))
+        hedge_delay_ms = int(tuning.get("hedgeDelayMs", 0))
 
         async def attempt_once():
             try:
@@ -566,7 +678,22 @@ class Agent:
 
         while True:
             try:
-                result = await attempt_once()
+                # Hedged attempt for read-only TMDB-like tools
+                is_read_only = not self._is_write_tool_name(name)
+                if hedge_delay_ms > 0 and is_read_only and self._classify_tool_family(name) == "tmdb":
+                    primary = asyncio.create_task(attempt_once())
+                    try:
+                        await asyncio.wait_for(asyncio.shield(primary), timeout=hedge_delay_ms / 1000)
+                        result = await primary
+                    except asyncio.TimeoutError:
+                        secondary = asyncio.create_task(attempt_once())
+                        done, pending = await asyncio.wait({primary, secondary}, return_when=asyncio.FIRST_COMPLETED)
+                        task = done.pop()
+                        result = task.result()
+                        for p in pending:
+                            p.cancel()
+                else:
+                    result = await attempt_once()
                 status = "ok"
                 break
             except asyncio.TimeoutError as e:
@@ -591,16 +718,23 @@ class Agent:
         return tc.id, name, result, attempt + 1, cache_hit
 
     async def _execute_tool_batch(self, tool_batch: List[Any], timeout_ms: int, retry_max: int, backoff_base_ms: int, dedup_cache: Optional[Dict[str, Any]] = None) -> List[tuple]:
-        """Execute a batch of similar tools concurrently."""
+        """Execute a batch of similar tools concurrently with per-family parallelism cap."""
         if not tool_batch:
             return []
-        
-        # Execute all tools in the batch concurrently
-        batch_results = await asyncio.gather(*[
-            self._execute_single_tool(tc, timeout_ms, retry_max, backoff_base_ms, dedup_cache)
-            for tc in tool_batch
-        ])
-        
+        # Per-family semaphore
+        first = tool_batch[0]
+        fam = self._classify_tool_family(first.function.name)
+        max_parallelism = self._select_parallelism_for_family(fam)
+        if max_parallelism <= 0:
+            max_parallelism = len(tool_batch)
+        sem = asyncio.Semaphore(max_parallelism)
+
+        async def _sem_wrap(one):
+            async with sem:
+                return await self._execute_single_tool(one, timeout_ms, retry_max, backoff_base_ms, dedup_cache)
+
+        batch_results = await asyncio.gather(*[_sem_wrap(tc) for tc in tool_batch])
+
         return batch_results
 
     async def _arun_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, role: str, max_iters: int | None = None, stream_final_to_callback: Optional[Callable[[str], Any]] = None) -> Any:
@@ -713,7 +847,7 @@ class Agent:
             # Append assistant message that contains ONLY the tool calls we will actually execute
             messages.append({
                 "role": "assistant",
-                "content": msg.content or "",
+                "content": "",
                 "tool_calls": [
                     {
                         "id": tc.id,
@@ -762,8 +896,8 @@ class Agent:
             total_tool_calls += len(flattened_results)
             
             # Determine max items to keep in summaries and cache TTL
-            list_max_items = int(rc.get("tools", {}).get("listMaxItems", 5))
-            cache_ttl_sec = int(rc.get("cache", {}).get("ttlShortSec", 60))
+            list_max_default = int(self._tuning_cfg.get("list_max_default", 5))
+            cache_ttl_sec = int(self._tuning_cfg.get("cache_ttl_short", 60))
             for tool_call_id, name, result, attempts, cache_hit in flattened_results:
                 ref_id = None
                 try:
@@ -773,6 +907,9 @@ class Agent:
 
                 try:
                     preserved = self._preserve_raw_if_small(result, max_keep=2)
+                    fam = self._classify_tool_family(name)
+                    fam_budgets = (self._tuning_cfg.get("tools_cfg", {}).get("listMaxItemsByFamily", {}) or {})
+                    list_max_items = int(fam_budgets.get(fam, list_max_default))
                     summarized = preserved if preserved is not None else summarize_tool_result(name, result, max_items=list_max_items)
                 except Exception:
                     summarized = result
