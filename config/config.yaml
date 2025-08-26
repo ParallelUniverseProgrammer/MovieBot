@@ -45,15 +45,17 @@ llm:
       smart: z-ai/glm-4.5-air:free
       worker: z-ai/glm-4.5-air:free
 tools:
-  timeoutMs: 1800
+  timeoutMs: 3500
   parallelism: 12
   retryMax: 2
-  backoffBaseMs: 60
+  backoffBaseMs: 50
   listMaxItems: 12
 ux:
-  progressThresholdMs: 600
-  progressUpdateIntervalMs: 900
+  progressThresholdMs: 450
+  progressUpdateIntervalMs: 700
   progressUpdateFrequency: 2
+  heartbeatIntervalMs: 1200
+  typingPulseMs: 7500
 http:
   connectTimeoutMs: 300
   readTimeoutMs: 900
@@ -62,5 +64,13 @@ http:
   retryMax: 1
   backoffBaseMs: 40
 cache:
-  ttlShortSec: 45
-  ttlMediumSec: 150
+  ttlShortSec: 60
+  ttlMediumSec: 240
+
+discord:
+  enabled: false
+  botToken: ""
+  channelId: ""
+  webhookUrl: ""
+  sendToolEvents: true
+  sendThinking: true

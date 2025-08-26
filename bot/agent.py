@@ -12,9 +12,9 @@ from .agent_prompt import build_agent_system_prompt
 from .tools.registry import build_openai_tools_and_registry
 from .tools.tool_impl import build_preferences_context  # reuse the same formatter
 from config.loader import load_runtime_config
-from config.loader import resolve_llm_provider_and_model
 from .tool_summarizers import summarize_tool_result
 from .tools.result_cache import put_tool_result
+from ux.progress import build_progress_broadcaster
 
 
 class Agent:
@@ -27,6 +27,21 @@ class Agent:
         self.project_root = project_root
         self.log = logging.getLogger("moviebot.agent")
         self.progress_callback = progress_callback
+        # Build async progress broadcaster (includes legacy callback sink and optional Discord sink)
+        try:
+            self.progress = build_progress_broadcaster(self.project_root, progress_callback)
+        except Exception:
+            self.progress = None  # Fallback; progress is best-effort
+
+    async def _emit_progress(self, event: str, data: Any) -> None:
+        try:
+            if getattr(self, "progress", None) is not None:
+                await self.progress.emit(event, data)
+            elif self.progress_callback:
+                # Legacy direct callback
+                await asyncio.to_thread(self.progress_callback, event, str(data))
+        except Exception:
+            pass
 
     def _chat_once(self, messages: List[Dict[str, Any]], model: str, role: str, tool_choice_override: Optional[str] = None) -> Any:
         self.log.debug("LLM.chat start", extra={
@@ -66,6 +81,12 @@ class Agent:
             "model": model,
             "message_count": len(messages),
         })
+        await self._emit_progress("llm.start", {"model": model, "messages": len(messages)})
+        if getattr(self, "progress", None) is not None:
+            try:
+                await self.progress.typing_start("llm")
+            except Exception:
+                pass
         if hasattr(self.llm, "achat"):
             from config.loader import resolve_llm_selection
             _, sel = resolve_llm_selection(self.project_root, role)
@@ -107,6 +128,12 @@ class Agent:
             "tool_calls": bool(getattr(getattr(resp.choices[0], 'message', {}), 'tool_calls', None)),  # type: ignore[attr-defined]
             "content_preview": content_preview,
         })
+        if getattr(self, "progress", None) is not None:
+            try:
+                await self.progress.typing_stop("llm")
+            except Exception:
+                pass
+        await self._emit_progress("llm.finish", {"model": model, "content_preview": content_preview})
         return resp
 
     async def _run_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, role: str, max_iters: int | None = None) -> Any:
@@ -132,6 +159,12 @@ class Agent:
         else:
             cfg_max_iters = int(llm_cfg_for_iters.get("maxIters", 8))
         messages: List[Dict[str, Any]] = [{"role": "system", "content": build_agent_system_prompt(parallelism_for_prompt, cfg_max_iters)}]
+        await self._emit_progress("agent.start", {"parallelism": parallelism_for_prompt, "iters": iters})
+        try:
+            if getattr(self, "progress", None) is not None:
+                self.progress.start_heartbeat("agent")
+        except Exception:
+            pass
         
         # Check if we should add household preferences context
         # For OpenAI GPT-5 models or OpenRouter models that support reasoning
@@ -164,11 +197,7 @@ class Agent:
             self.log.info(f"agent iteration {iter_idx+1}/{iters}")
             
             # Notify progress callback about LLM thinking
-            if self.progress_callback:
-                try:
-                    self.progress_callback("thinking", f"iteration {iter_idx+1}/{iters}")
-                except Exception:
-                    pass  # Don't let progress updates break the main flow
+            await self._emit_progress("thinking", {"iteration": f"{iter_idx+1}/{iters}"})
             
             last_response = await self._achat_once(messages, model, role)
             choice = last_response.choices[0]
@@ -176,6 +205,12 @@ class Agent:
             tool_calls = getattr(msg, "tool_calls", None)
             if not tool_calls:
                 self.log.info("no tool calls; returning final answer")
+                try:
+                    if getattr(self, "progress", None) is not None:
+                        self.progress.stop_heartbeat("agent")
+                except Exception:
+                    pass
+                await self._emit_progress("agent.finish", {"reason": "final_answer"})
                 return last_response
             # Append assistant message that contains tool calls
             messages.append({
@@ -264,6 +299,12 @@ class Agent:
                 }
             ]
         }
+        try:
+            if getattr(self, "progress", None) is not None:
+                self.progress.stop_heartbeat("agent")
+        except Exception:
+            pass
+        await self._emit_progress("agent.finish", {"reason": "max_iters"})
         return synthesized  # type: ignore[return-value]
 
     def _group_tool_calls_for_batching(self, tool_calls: List[Any]) -> List[Any]:
@@ -338,12 +379,8 @@ class Agent:
         self.log.info(f"tool call requested: {name}")
         self.log.debug("tool args", extra={"name": name, "args": args_json})
         
-        # Notify progress callback about tool execution
-        if self.progress_callback:
-            try:
-                self.progress_callback("tool", name)
-            except Exception:
-                pass
+        # Emit tool start
+        await self._emit_progress("tool.start", {"name": name, "args": args_json})
         
         # Parse args
         try:
@@ -361,6 +398,7 @@ class Agent:
             self.log.info("tool dedup cache hit", extra={"name": name})
             result = dedup_cache[dedup_key]
             # attempts=0 for dedup hit, cache_hit=True
+            await self._emit_progress("tool.finish", {"name": name, "status": "ok", "duration_ms": 0, "attempts": 0, "cache_hit": True})
             return tc.id, name, result, 0, True
 
         # Execute with retries/backoff, timeout, and timing
@@ -399,12 +437,7 @@ class Agent:
             dedup_cache[dedup_key] = result
 
         self.log.info("tool done", extra={"name": name, "status": status, "duration_ms": duration_ms, "attempts": attempt + 1, "cache_hit": cache_hit})
-        # Notify progress callback about tool completion
-        if self.progress_callback:
-            try:
-                self.progress_callback("tool_done" if status == "ok" else "tool_error", name)
-            except Exception:
-                pass
+        await self._emit_progress("tool.finish" if status == "ok" else "tool.error", {"name": name, "status": status, "duration_ms": duration_ms, "attempts": attempt + 1})
         return tc.id, name, result, attempt + 1, cache_hit
 
     async def _execute_tool_batch(self, tool_batch: List[Any], timeout_ms: int, retry_max: int, backoff_base_ms: int, dedup_cache: Optional[Dict[str, Any]] = None) -> List[tuple]:
@@ -444,6 +477,12 @@ class Agent:
         else:
             cfg_max_iters = int(llm_cfg_for_iters.get("maxIters", 8))
         messages: List[Dict[str, Any]] = [{"role": "system", "content": build_agent_system_prompt(parallelism_for_prompt, cfg_max_iters)}]
+        await self._emit_progress("agent.start", {"parallelism": parallelism_for_prompt, "iters": iters})
+        try:
+            if getattr(self, "progress", None) is not None:
+                self.progress.start_heartbeat("agent")
+        except Exception:
+            pass
         
         # Check if we should add household preferences context
         # For OpenAI GPT-5 models or OpenRouter models that support reasoning
@@ -476,11 +515,7 @@ class Agent:
             self.log.info(f"agent iteration {iter_idx+1}/{iters}")
             
             # Notify progress callback about LLM thinking
-            if self.progress_callback:
-                try:
-                    self.progress_callback("thinking", f"iteration {iter_idx+1}/{iters}")
-                except Exception:
-                    pass  # Don't let progress updates break the main flow
+            await self._emit_progress("thinking", {"iteration": f"{iter_idx+1}/{iters}"})
             
             last_response = await self._achat_once(messages, model, role)
             choice = last_response.choices[0]
@@ -488,6 +523,12 @@ class Agent:
             tool_calls = getattr(msg, 'tool_calls', None)
             if not tool_calls:
                 self.log.info("no tool calls; returning final answer")
+                try:
+                    if getattr(self, "progress", None) is not None:
+                        self.progress.stop_heartbeat("agent")
+                except Exception:
+                    pass
+                await self._emit_progress("agent.finish", {"reason": "final_answer"})
                 return last_response
             # Append assistant message that contains tool calls
             messages.append({
@@ -572,6 +613,12 @@ class Agent:
                 }
             ]
         }
+        try:
+            if getattr(self, "progress", None) is not None:
+                self.progress.stop_heartbeat("agent")
+        except Exception:
+            pass
+        await self._emit_progress("agent.finish", {"reason": "max_iters"})
         return synthesized  # type: ignore[return-value]
 
     def _preserve_raw_if_small(self, result: Any, max_keep: int) -> Optional[Dict[str, Any]]:
