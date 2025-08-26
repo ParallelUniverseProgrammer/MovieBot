@@ -40,7 +40,18 @@ def summarize_tool_result(name: str, result: Dict[str, Any], *, max_items: int =
         "get_plex_unwatched", "get_plex_similar_items", "get_plex_movies_4k_or_hdr"
     }:
         items = result.get("items") or []
-        out["items"] = _summarize_items_list(items, ["title", "year", "rating", "ratingKey", "type"], max_items)
+        resp_level = str(result.get("response_level", "compact")).lower()
+        if resp_level == "minimal":
+            fields = ["title", "ratingKey", "type"]
+            out["items"] = _summarize_items_list(items, fields, max_items)
+        elif resp_level == "compact":
+            fields = ["title", "year", "rating", "ratingKey", "type"]
+            out["items"] = _summarize_items_list(items, fields, max_items)
+        elif resp_level == "standard":
+            fields = ["title", "year", "rating", "contentRating", "duration", "genres", "summary", "ratingKey", "type"]
+            out["items"] = _summarize_items_list(items, fields, max_items)
+        else:  # detailed: keep all fields, only truncate count
+            out["items"] = _truncate_list(items, max_items)
         if "total_found" in result:
             out["total_found"] = result.get("total_found")
         if name == "get_plex_movies_4k_or_hdr":
@@ -53,14 +64,22 @@ def summarize_tool_result(name: str, result: Dict[str, Any], *, max_items: int =
 
     if name in {"get_plex_collections"}:
         cols = result.get("collections") or []
-        out["collections"] = _summarize_items_list(cols, ["title", "collection_id", "count"], max_items)
+        resp_level = str(result.get("response_level", "compact")).lower()
+        fields = ["title", "collection_id", "count"]
+        if resp_level in ("standard", "detailed"):
+            fields = ["title", "collection_id", "count", "summary"]
+        out["collections"] = _summarize_items_list(cols, fields, max_items)
         if "total_found" in result:
             out["total_found"] = result.get("total_found")
         return out
 
     if name in {"get_plex_playlists"}:
         pls = result.get("playlists") or []
-        out["playlists"] = _summarize_items_list(pls, ["title", "playlist_id", "count"], max_items)
+        resp_level = str(result.get("response_level", "compact")).lower()
+        fields = ["title", "playlist_id", "count"]
+        if resp_level in ("standard", "detailed"):
+            fields = ["title", "playlist_id", "count", "summary", "duration"]
+        out["playlists"] = _summarize_items_list(pls, fields, max_items)
         if "total_found" in result:
             out["total_found"] = result.get("total_found")
         return out
@@ -79,12 +98,11 @@ def summarize_tool_result(name: str, result: Dict[str, Any], *, max_items: int =
             out["total_pages"] = result.get("total_pages")
             out["total_results"] = result.get("total_results")
             results = result.get("results") or []
-            out["results"] = _summarize_items_list(results, ["id", "title", "overview", "vote_average", "release_date", "media_type", "poster_path"], max_items)
+            # Preserve whatever fields TMDb client produced for each item; only truncate count
+            out["results"] = _truncate_list(results, max_items)
             return out
-        # Details shape
-        fields = ["id", "title", "overview", "vote_average", "release_date", "genres", "runtime", "poster_path"]
-        out = _keep_fields(result, fields)
-        return out
+        # Details shape: return as-is to respect chosen response level
+        return result
 
     # Sonarr/Radarr common patterns
     if name in {"radarr_get_movies"}:

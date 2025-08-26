@@ -7,7 +7,8 @@ sonarr:
   qualityProfileId: 4
   rootFolderPath: "D:\\TV"
 llm:
-  maxIters: 8
+  agentMaxIters: 5
+  workerMaxIters: 2
   providers:
     priority: [openai, openrouter]
     openai:
@@ -15,20 +16,20 @@ llm:
         model: gpt-5-mini
         reasoningEffort: low
       smart:
-        model: gpt-5
-        reasoningEffort: medium
+        model: gpt-5-mini
+        reasoningEffort: minimal
       worker:
-        model: gpt-5-nano
+        model: gpt-5-mini
         reasoningEffort: medium
       quick:
+        model: gpt-4.1-nano
+        params:
+          max_tokens: 180
+      summarizer:
         model: gpt-5-nano
         reasoningEffort: low
         params:
-          max_response_tokens: 180
-      summarizer:
-        model: gpt-4o-mini
-        params:
-          max_tokens: 200
+          max_response_tokens: 200
     openrouter:
       chat: z-ai/glm-4.5-air:free
       smart: z-ai/glm-4.5-air:free
@@ -36,20 +37,20 @@ llm:
 tools:
   timeoutMs: 2500
   parallelism: 10
-  retryMax: 1
+  retryMax: 2
   backoffBaseMs: 80
-  listMaxItems: 8
+  listMaxItems: 25
 ux:
-  progressThresholdMs: 2500
-  progressUpdateIntervalMs: 6000
-  progressUpdateFrequency: 3
+  progressThresholdMs: 600
+  progressUpdateIntervalMs: 1200
+  progressUpdateFrequency: 2
 http:
-  connectTimeoutMs: 1500
-  readTimeoutMs: 2000
-  totalTimeoutMs: 5000
-  maxConnections: 128
+  connectTimeoutMs: 300
+  readTimeoutMs: 1000
+  totalTimeoutMs: 2500
+  maxConnections: 256
   retryMax: 1
-  backoffBaseMs: 80
+  backoffBaseMs: 40
 cache:
-  ttlShortSec: 60
-  ttlMediumSec: 300
+  ttlShortSec: 30
+  ttlMediumSec: 120

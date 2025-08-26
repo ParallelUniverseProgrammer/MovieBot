@@ -8,7 +8,7 @@ import logging
 import threading
 
 from llm.clients import LLMClient
-from .agent_prompt import AGENT_SYSTEM_PROMPT
+from .agent_prompt import build_agent_system_prompt
 from .tools.registry import build_openai_tools_and_registry
 from .tools.tool_impl import build_preferences_context  # reuse the same formatter
 from config.loader import load_runtime_config
@@ -107,10 +107,26 @@ class Agent:
     async def _run_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, role: str, max_iters: int | None = None) -> Any:
         # Load runtime config for loop controls
         rc = load_runtime_config(self.project_root)
-        cfg_max_iters = int(rc.get("llm", {}).get("maxIters", 8))
+        # Role-specific iteration limits: prefer agentMaxIters/workerMaxIters, fallback to legacy maxIters
+        llm_cfg = rc.get("llm", {}) or {}
+        if role in ("smart", "chat"):
+            cfg_max_iters = int(llm_cfg.get("agentMaxIters", llm_cfg.get("maxIters", 8)))
+        elif role == "worker":
+            cfg_max_iters = int(llm_cfg.get("workerMaxIters", llm_cfg.get("maxIters", 8)))
+        else:
+            cfg_max_iters = int(llm_cfg.get("maxIters", 8))
         iters = max_iters or cfg_max_iters
         # System message + optional dynamic household preferences context (for recommendations)
-        messages: List[Dict[str, Any]] = [{"role": "system", "content": AGENT_SYSTEM_PROMPT}]
+        parallelism_for_prompt = int(rc.get("tools", {}).get("parallelism", 4))
+        # Compute max iterations for this role to pass as a hint into the system prompt
+        llm_cfg_for_iters = rc.get("llm", {}) or {}
+        if role in ("smart", "chat"):
+            cfg_max_iters = int(llm_cfg_for_iters.get("agentMaxIters", llm_cfg_for_iters.get("maxIters", 8)))
+        elif role == "worker":
+            cfg_max_iters = int(llm_cfg_for_iters.get("workerMaxIters", llm_cfg_for_iters.get("maxIters", 8)))
+        else:
+            cfg_max_iters = int(llm_cfg_for_iters.get("maxIters", 8))
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": build_agent_system_prompt(parallelism_for_prompt, cfg_max_iters)}]
         
         # Check if we should add household preferences context
         # For OpenAI GPT-5 models or OpenRouter models that support reasoning
@@ -215,7 +231,9 @@ class Agent:
 
                 # Summarize and minify tool output before appending
                 try:
-                    summarized = summarize_tool_result(name, result, max_items=list_max_items)
+                    # If result set is very small (<=2), preserve raw fields (truncated) instead of lossy summary
+                    preserved = self._preserve_raw_if_small(result, max_keep=2)
+                    summarized = preserved if preserved is not None else summarize_tool_result(name, result, max_items=list_max_items)
                 except Exception:
                     summarized = result
 
@@ -394,10 +412,26 @@ class Agent:
         """Async version of _run_tools_loop for non-blocking operations."""
         # Load runtime config for loop controls
         rc = load_runtime_config(self.project_root)
-        cfg_max_iters = int(rc.get("llm", {}).get("maxIters", 8))
+        # Role-specific iteration limits: prefer agentMaxIters/workerMaxIters, fallback to legacy maxIters
+        llm_cfg = rc.get("llm", {}) or {}
+        if role in ("smart", "chat"):
+            cfg_max_iters = int(llm_cfg.get("agentMaxIters", llm_cfg.get("maxIters", 8)))
+        elif role == "worker":
+            cfg_max_iters = int(llm_cfg.get("workerMaxIters", llm_cfg.get("maxIters", 8)))
+        else:
+            cfg_max_iters = int(llm_cfg.get("maxIters", 8))
         iters = max_iters or cfg_max_iters
         # System message + optional dynamic household preferences context (for recommendations)
-        messages: List[Dict[str, Any]] = [{"role": "system", "content": AGENT_SYSTEM_PROMPT}]
+        parallelism_for_prompt = int(rc.get("tools", {}).get("parallelism", 4))
+        # Compute max iterations for this role to pass as a hint into the system prompt
+        llm_cfg_for_iters = rc.get("llm", {}) or {}
+        if role in ("smart", "chat"):
+            cfg_max_iters = int(llm_cfg_for_iters.get("agentMaxIters", llm_cfg_for_iters.get("maxIters", 8)))
+        elif role == "worker":
+            cfg_max_iters = int(llm_cfg_for_iters.get("workerMaxIters", llm_cfg_for_iters.get("maxIters", 8)))
+        else:
+            cfg_max_iters = int(llm_cfg_for_iters.get("maxIters", 8))
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": build_agent_system_prompt(parallelism_for_prompt, cfg_max_iters)}]
         
         # Check if we should add household preferences context
         # For OpenAI GPT-5 models or OpenRouter models that support reasoning
@@ -501,7 +535,8 @@ class Agent:
                     ref_id = None
 
                 try:
-                    summarized = summarize_tool_result(name, result, max_items=list_max_items)
+                    preserved = self._preserve_raw_if_small(result, max_keep=2)
+                    summarized = preserved if preserved is not None else summarize_tool_result(name, result, max_items=list_max_items)
                 except Exception:
                     summarized = result
                 payload = {"ref_id": ref_id, "summary": summarized}
@@ -529,12 +564,31 @@ class Agent:
             "choices": [
                 {
                     "message": {
-                        "content": "This needs a few more steps. Want me to continue?"
+                        "content": "I've reached the configured iteration limit and provided the best possible answer with available information."
                     }
                 }
             ]
         }
         return synthesized  # type: ignore[return-value]
+
+    def _preserve_raw_if_small(self, result: Any, max_keep: int) -> Optional[Dict[str, Any]]:
+        """If the tool result contains a small list (<= max_keep), return a copy preserving fields.
+
+        Checks common list keys and returns a truncated raw copy to avoid lossy summarization
+        when there are very few items.
+        """
+        try:
+            if not isinstance(result, dict):
+                return None
+            for key in ("items", "results", "movies", "series", "episodes", "playlists", "collections"):
+                val = result.get(key)
+                if isinstance(val, list) and len(val) <= max_keep:
+                    out = dict(result)
+                    out[key] = val[:max_keep]
+                    return out
+        except Exception:
+            return None
+        return None
 
     def converse(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         # Choose model from config

@@ -119,9 +119,9 @@ def test_openai_model_reasoning_combos_from_config_sync():
         # quick with explicit max_tokens
         c.chat(model=quick_model, messages=[{"role": "user", "content": "hi"}], max_tokens=quick_max)
         args = mock_create.call_args.kwargs
-        # GPT-5 quick path should coerce to max_completion_tokens
-        assert args["model"] == quick_model and args["max_completion_tokens"] == quick_max
-        assert "max_tokens" not in args
+        # GPT-4.x quick models should use max_tokens (not max_completion_tokens)
+        assert args["model"] == quick_model and args["max_tokens"] == quick_max
+        assert "max_completion_tokens" not in args
 
         # summarizer with alt key that must normalize to max_tokens; reasoning forwarded
         c.chat(

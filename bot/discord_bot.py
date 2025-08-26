@@ -312,16 +312,32 @@ class MovieBotClient(discord.Client):
             s_lo = s.strip().lower()
             if not s_lo:
                 return False
+
+            # Avoid quick path for actionable/tool-intent requests
+            blocklist = [
+                "search", "find", "recommend", "recommendation", "trending", "popular",
+                "add", "queue", "status", "recent", "on deck", "continue", "rate", "rating",
+                "unwatched", "collection", "details", "similar", "top rated", "upcoming",
+                "now playing", "watch providers", "providers",
+                "plex", "radarr", "sonarr", "tmdb"
+            ]
+            for term in blocklist:
+                if re.search(r"\b" + re.escape(term) + r"\b", s_lo):
+                    return False
+
             # Greetings / pleasantries / capability queries / style-only asks
             quick_keywords = [
                 "hi", "hello", "hey", "how are you", "what can you do", "help", "capabilities",
                 "who are you", "what is moviebot", "explain yourself", "about you", "commands",
                 "format", "how to use", "usage", "examples", "tips", "thanks", "thank you"
             ]
-            if any(k in s_lo for k in quick_keywords):
-                return True
-            # Short questions without actionable nouns often don't need tools
-            return len(s_lo) <= 48 and s_lo.endswith(("?", "."))
+
+            for phrase in quick_keywords:
+                if re.search(r"\b" + re.escape(phrase) + r"\b", s_lo):
+                    return True
+
+            # Default: not quick-path
+            return False
 
         # Quick-path answer function using the 'quick' role
         async def _maybe_quick_path_response(text: str) -> str | None:
@@ -359,6 +375,7 @@ class MovieBotClient(discord.Client):
                 rc = load_runtime_config(self.project_root)  # type: ignore[attr-defined]
                 progress_ms = int(rc.get("ux", {}).get("progressThresholdMs", 3000))  # Reduced from 5000ms for faster feedback
                 done = asyncio.Event()
+                used_quick_path = False
 
                 async def progress_updater():
                     """Update the progress message only when real events occur."""
@@ -402,14 +419,15 @@ class MovieBotClient(discord.Client):
                     except Exception as e:
                         log.warning(f"Failed to send or update progress message: {e}")
 
-                progress_update_task = asyncio.create_task(progress_updater())
-
                 try:
-                    # Try quick-path first
+                    # Try quick-path first (do not start progress updates yet)
                     quick_text = await _maybe_quick_path_response(content)
                     if quick_text is not None and quick_text.strip():
                         response = {"choices": [{"message": {"content": quick_text}}]}
+                        used_quick_path = True
                     else:
+                        # Only start progress updates if we are not using quick path
+                        progress_update_task = asyncio.create_task(progress_updater())
                         try:
                             response = await agent.aconverse(history)
                         except Exception:
@@ -417,6 +435,7 @@ class MovieBotClient(discord.Client):
                             fallback_text = await _maybe_quick_path_response(content)
                             if fallback_text:
                                 response = {"choices": [{"message": {"content": fallback_text}}]}
+                                used_quick_path = True
                             else:
                                 raise
                 finally:
@@ -424,10 +443,21 @@ class MovieBotClient(discord.Client):
                     if progress_update_task:
                         progress_update_task.cancel()
                         
-            text = (
-                response.choices[0].message.content  # type: ignore[attr-defined]
-                if hasattr(response, 'choices') else str(response)
-            )
+            # Extract text from response for both SDK objects and plain dicts
+            try:
+                if isinstance(response, dict):
+                    choices = response.get("choices", [])  # type: ignore[assignment]
+                    if choices and isinstance(choices[0], dict):
+                        msg = choices[0].get("message", {})
+                        text = msg.get("content", "")
+                    else:
+                        text = str(response)
+                elif hasattr(response, "choices"):
+                    text = response.choices[0].message.content  # type: ignore[attr-defined]
+                else:
+                    text = str(response)
+            except Exception:
+                text = str(response)
         except Exception as e:  # noqa: BLE001
             text = f"(error talking to model: {e})"
             done.set()
