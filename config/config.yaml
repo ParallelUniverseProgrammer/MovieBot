@@ -15,12 +15,21 @@ llm:
       chat:
         model: gpt-5-mini
         reasoningEffort: low
+        params:
+          temperature: 1
+          tool_choice: auto
       smart:
         model: gpt-5-mini
         reasoningEffort: minimal
+        params:
+          temperature: 1
+          tool_choice: auto
       worker:
         model: gpt-5-mini
         reasoningEffort: medium
+        params:
+          temperature: 1
+          tool_choice: auto
       quick:
         model: gpt-4.1-nano
         params:
@@ -30,27 +39,28 @@ llm:
         reasoningEffort: low
         params:
           max_response_tokens: 200
+          temperature: 1
     openrouter:
       chat: z-ai/glm-4.5-air:free
       smart: z-ai/glm-4.5-air:free
       worker: z-ai/glm-4.5-air:free
 tools:
-  timeoutMs: 2500
-  parallelism: 10
+  timeoutMs: 1800
+  parallelism: 12
   retryMax: 2
-  backoffBaseMs: 80
-  listMaxItems: 25
+  backoffBaseMs: 60
+  listMaxItems: 12
 ux:
   progressThresholdMs: 600
-  progressUpdateIntervalMs: 1200
+  progressUpdateIntervalMs: 900
   progressUpdateFrequency: 2
 http:
   connectTimeoutMs: 300
-  readTimeoutMs: 1000
-  totalTimeoutMs: 2500
-  maxConnections: 256
+  readTimeoutMs: 900
+  totalTimeoutMs: 2200
+  maxConnections: 384
   retryMax: 1
   backoffBaseMs: 40
 cache:
-  ttlShortSec: 30
-  ttlMediumSec: 120
+  ttlShortSec: 45
+  ttlMediumSec: 150

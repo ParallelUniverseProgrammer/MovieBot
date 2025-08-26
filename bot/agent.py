@@ -28,7 +28,7 @@ class Agent:
         self.log = logging.getLogger("moviebot.agent")
         self.progress_callback = progress_callback
 
-    def _chat_once(self, messages: List[Dict[str, Any]], model: str, role: str) -> Any:
+    def _chat_once(self, messages: List[Dict[str, Any]], model: str, role: str, tool_choice_override: Optional[str] = None) -> Any:
         self.log.debug("LLM.chat start", extra={
             "model": model,
             "message_count": len(messages),
@@ -37,13 +37,16 @@ class Agent:
         from config.loader import resolve_llm_selection
         _, sel = resolve_llm_selection(self.project_root, role)
         params = dict(sel.get("params", {}))
-        params.setdefault("temperature", 1)
+        # gpt-5 family requires temperature exactly 1
+        params["temperature"] = 1
+        tool_choice_value = tool_choice_override if tool_choice_override is not None else params.pop("tool_choice", "auto")
+        # Pass tool_choice via params only to avoid duplicate named arg binding
+        params["tool_choice"] = tool_choice_value
         resp = self.llm.chat(
             model=model,
             messages=messages,
             tools=self.openai_tools,
             reasoning=sel.get("reasoningEffort"),
-            tool_choice=params.pop("tool_choice", "auto"),
             **params,
         )
 
@@ -57,7 +60,7 @@ class Agent:
         })
         return resp
 
-    async def _achat_once(self, messages: List[Dict[str, Any]], model: str, role: str) -> Any:
+    async def _achat_once(self, messages: List[Dict[str, Any]], model: str, role: str, tool_choice_override: Optional[str] = None) -> Any:
         """Async version of _chat_once for non-blocking LLM calls."""
         self.log.debug("LLM.achat start", extra={
             "model": model,
@@ -67,13 +70,14 @@ class Agent:
             from config.loader import resolve_llm_selection
             _, sel = resolve_llm_selection(self.project_root, role)
             params = dict(sel.get("params", {}))
-            params.setdefault("temperature", 1)
+            params["temperature"] = 1
+            tool_choice_value = tool_choice_override if tool_choice_override is not None else params.pop("tool_choice", "auto")
+            params["tool_choice"] = tool_choice_value
             resp = await self.llm.achat(
                 model=model,
                 messages=messages,
                 tools=self.openai_tools,
                 reasoning=sel.get("reasoningEffort"),
-                tool_choice=params.pop("tool_choice", "auto"),
                 **params,
             )
         else:
@@ -82,14 +86,15 @@ class Agent:
             from config.loader import resolve_llm_selection
             _, sel = resolve_llm_selection(self.project_root, role)
             params = dict(sel.get("params", {}))
-            params.setdefault("temperature", 1)
+            params["temperature"] = 1
+            tool_choice_value = tool_choice_override if tool_choice_override is not None else params.pop("tool_choice", "auto")
+            params["tool_choice"] = tool_choice_value
             fn = functools.partial(
                 self.llm.chat,
                 model=model,
                 messages=messages,
                 tools=self.openai_tools,
                 reasoning=sel.get("reasoningEffort"),
-                tool_choice=params.pop("tool_choice", "auto"),
                 **params,
             )
             resp = await asyncio.to_thread(fn)
@@ -131,8 +136,8 @@ class Agent:
         # Check if we should add household preferences context
         # For OpenAI GPT-5 models or OpenRouter models that support reasoning
         should_add_prefs = (
-            model == "gpt-5" or 
-            (hasattr(self.llm, 'provider') and self.llm.provider == "openrouter" and "glm-4.5" in model)
+            ("gpt-5" in str(model)) or 
+            (hasattr(self.llm, 'provider') and self.llm.provider == "openrouter" and "glm-4.5" in str(model))
         )
         
         if should_add_prefs:
@@ -250,7 +255,9 @@ class Agent:
                     self.progress_callback("finalizing", "synthesizing reply")
                 except Exception:
                     pass
-            final_resp = await self._achat_once(messages, model, role)
+            # Force finalization pass with tool_choice="none" to reduce extra tool turns
+            messages.append({"role": "system", "content": "Finalize now: produce a concise user-facing reply with no meta-instructions or headings. Do not call tools."})
+            final_resp = await self._achat_once(messages, model, role, tool_choice_override="none")
             try:
                 final_tc = getattr(final_resp.choices[0].message, "tool_calls", None)
             except Exception:
@@ -262,7 +269,7 @@ class Agent:
             "choices": [
                 {
                     "message": {
-                        "content": "This needs a few more steps. Want me to continue?"
+                        "content": "Proceeding with best-effort result given the iteration limit."
                     }
                 }
             ]
@@ -436,8 +443,8 @@ class Agent:
         # Check if we should add household preferences context
         # For OpenAI GPT-5 models or OpenRouter models that support reasoning
         should_add_prefs = (
-            model == "gpt-5" or 
-            (hasattr(self.llm, 'provider') and self.llm.provider == "openrouter" and "glm-4.5" in model)
+            ("gpt-5" in str(model)) or 
+            (hasattr(self.llm, 'provider') and self.llm.provider == "openrouter" and "glm-4.5" in str(model))
         )
         
         if should_add_prefs:
@@ -552,7 +559,8 @@ class Agent:
                     self.progress_callback("finalizing", "synthesizing reply")
                 except Exception:
                     pass
-            final_resp = await self._achat_once(messages, model, role)
+            messages.append({"role": "system", "content": "Finalize now: produce a concise user-facing reply with no meta-instructions or headings. Do not call tools."})
+            final_resp = await self._achat_once(messages, model, role, tool_choice_override="none")
             try:
                 final_tc = getattr(final_resp.choices[0].message, "tool_calls", None)
             except Exception:
@@ -564,7 +572,7 @@ class Agent:
             "choices": [
                 {
                     "message": {
-                        "content": "I've reached the configured iteration limit and provided the best possible answer with available information."
+                        "content": "Proceeding with best-effort result given the iteration limit."
                     }
                 }
             ]

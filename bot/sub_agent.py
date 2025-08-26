@@ -26,7 +26,7 @@ class SubAgent:
         self.project_root = project_root
         self.log = logging.getLogger("moviebot.sub_agent")
 
-    def _chat_once(self, messages: List[Dict[str, Any]], model: str, role: str) -> Any:
+    def _chat_once(self, messages: List[Dict[str, Any]], model: str, role: str, tool_choice_override: str | None = None) -> Any:
         """Single chat interaction with the LLM."""
         self.log.debug("SubAgent LLM.chat start", extra={
             "model": model,
@@ -36,13 +36,15 @@ class SubAgent:
         from config.loader import resolve_llm_selection
         _, sel = resolve_llm_selection(self.project_root, role)
         params = dict(sel.get("params", {}))
-        params.setdefault("temperature", 0.7)
+        # gpt-5 family requires temperature exactly 1
+        params["temperature"] = 1
+        tool_choice_value = tool_choice_override if tool_choice_override is not None else params.pop("tool_choice", "auto")
+        params["tool_choice"] = tool_choice_value
         resp = self.llm.chat(
             model=model,
             messages=messages,
             tools=self.openai_tools,
             reasoning=sel.get("reasoningEffort"),
-            tool_choice=params.pop("tool_choice", "auto"),
             **params,
         )
 
@@ -57,7 +59,7 @@ class SubAgent:
         })
         return resp
 
-    async def _achat_once(self, messages: List[Dict[str, Any]], model: str, role: str) -> Any:
+    async def _achat_once(self, messages: List[Dict[str, Any]], model: str, role: str, tool_choice_override: str | None = None) -> Any:
         """Async version of _chat_once for non-blocking LLM calls."""
         self.log.debug("SubAgent LLM.achat start", extra={
             "model": model,
@@ -67,13 +69,14 @@ class SubAgent:
         from config.loader import resolve_llm_selection
         _, sel = resolve_llm_selection(self.project_root, role)
         params = dict(sel.get("params", {}))
-        params.setdefault("temperature", 0.7)
+        params["temperature"] = 1
+        tool_choice_value = tool_choice_override if tool_choice_override is not None else params.pop("tool_choice", "auto")
+        params["tool_choice"] = tool_choice_value
         resp = await self.llm.achat(
             model=model,
             messages=messages,
             tools=self.openai_tools,
             reasoning=sel.get("reasoningEffort"),
-            tool_choice=params.pop("tool_choice", "auto"),
             **params,
         )
 
@@ -167,7 +170,9 @@ Remember: Search for ALL episodes, not just some of them!
                     for tc, result in zip(tool_calls, results)
                 ]
                 
-                final_response = await self._achat_once(final_messages, model, "worker")
+                # Force finalization without further tool calls
+                final_messages.append({"role": "system", "content": "Finalize now: produce a concise user-facing reply with no meta-instructions or headings. Do not call tools."})
+                final_response = await self._achat_once(final_messages, model, "worker", tool_choice_override="none")
                 final_content = final_response.choices[0].message.content or ""
                 
                 self.log.info(f"Episode fallback search completed. Final response: {final_content[:200]}...")
@@ -291,7 +296,8 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
                     for tc, result in zip(tool_calls, results)
                 ]
                 
-                final_response = await self._achat_once(final_messages, model, "worker")
+                final_messages.append({"role": "system", "content": "Finalize now: produce a concise user-facing reply with no meta-instructions or headings. Do not call tools."})
+                final_response = await self._achat_once(final_messages, model, "worker", tool_choice_override="none")
                 return {
                     "success": True,
                     "content": final_response.choices[0].message.content,
