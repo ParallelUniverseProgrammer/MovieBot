@@ -207,14 +207,17 @@ def _humanize_event(event_type: str, data: Any) -> Dict[str, Any]:
             base["message"] = "LLM plan refined; executing the most promising actions now."
         elif event_type == "tool.start":
             pretty = _pretty_tool_name(name or "tool")
-            base["message"] = f"Starting {pretty} to advance the goal."
+            label = name or "tool"
+            base["message"] = f"Starting {pretty} ({label}) to advance the goal."
         elif event_type == "tool.finish":
             pretty = _pretty_tool_name(name or "tool")
+            label = name or "tool"
             dur = _safe_get(data, "duration_ms")
-            base["message"] = f"Finished {pretty} in {dur} ms; folding results into the plan."
+            base["message"] = f"Finished {pretty} ({label}) in {dur} ms; folding results into the plan."
         elif event_type == "tool.error":
             pretty = _pretty_tool_name(name or "tool")
-            base["message"] = f"{pretty} hit a snag; recovering with retries or alternatives."
+            label = name or "tool"
+            base["message"] = f"{pretty} ({label}) hit a snag; recovering with retries or alternatives."
         elif event_type == "heartbeat":
             base["message"] = "Still working—keeping things moving in the background."
         elif event_type == "agent.finish":

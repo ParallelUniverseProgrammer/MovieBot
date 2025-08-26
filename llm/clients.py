@@ -91,7 +91,8 @@ class OpenRouterClient:
         # Reasoning param (top-level per SDK expectations)
         if reasoning is not None:
             params["reasoning"] = {"effort": reasoning}
-        if tool_choice is not None:
+        # Only include tool_choice when tools are provided
+        if (tools is not None) and (tool_choice is not None):
             params["tool_choice"] = tool_choice
         # Normalize any provided kwargs
         kwargs = self._normalize_params(kwargs)
@@ -112,7 +113,7 @@ class OpenRouterClient:
             params["tools"] = tools
         if reasoning is not None:
             params["reasoning"] = {"effort": reasoning}
-        if tool_choice is not None:
+        if (tools is not None) and (tool_choice is not None):
             params["tool_choice"] = tool_choice
         # Normalize any provided kwargs
         kwargs = self._normalize_params(kwargs)
@@ -136,7 +137,7 @@ class OpenRouterClient:
             params["tools"] = tools
         if reasoning is not None:
             params["reasoning"] = {"effort": reasoning}
-        if tool_choice is not None:
+        if (tools is not None) and (tool_choice is not None):
             params["tool_choice"] = tool_choice
         kwargs = self._normalize_params(kwargs)
         provided_headers = kwargs.pop("extra_headers", None)
@@ -268,7 +269,7 @@ class LLMClient:
             # Forward reasoning for supported models using reasoning_effort (no mapping)
             if reasoning is not None:
                 params["reasoning_effort"] = str(reasoning)
-            if tool_choice is not None:
+            if (tools is not None) and (tool_choice is not None):
                 params["tool_choice"] = tool_choice
             params.update(self._normalize_params_openai(model, kwargs))
             return self.client.chat.completions.create(**params)  # type: ignore[no-any-return]
@@ -296,7 +297,7 @@ class LLMClient:
             # Forward reasoning for supported models using reasoning_effort (no mapping)
             if reasoning is not None:
                 params["reasoning_effort"] = str(reasoning)
-            if tool_choice is not None:
+            if (tools is not None) and (tool_choice is not None):
                 params["tool_choice"] = tool_choice
             params.update(self._normalize_params_openai(model, kwargs))
             return await self.async_client.chat.completions.create(**params)  # type: ignore[no-any-return]
@@ -318,7 +319,7 @@ class LLMClient:
             params["tools"] = tools
         if reasoning is not None:
             params["reasoning_effort"] = str(reasoning)
-        if tool_choice is not None:
+        if (tools is not None) and (tool_choice is not None):
             params["tool_choice"] = tool_choice
         params.update(self._normalize_params_openai(model, kwargs))
 

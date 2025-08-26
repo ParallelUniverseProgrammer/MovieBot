@@ -7,26 +7,26 @@ sonarr:
   qualityProfileId: 4
   rootFolderPath: "D:\\TV"
 llm:
-  agentMaxIters: 5
+  agentMaxIters: 6
   workerMaxIters: 2
   providers:
     priority: [openai, openrouter]
     openai:
       chat:
-        model: gpt-5-mini
+        model: gpt-5
         reasoningEffort: minimal
         params:
           temperature: 1
           tool_choice: auto
       smart:
-        model: gpt-5-mini
+        model: gpt-5
         reasoningEffort: medium
         params:
           temperature: 1
           tool_choice: auto
       worker:
         model: gpt-5-mini
-        reasoningEffort: low
+        reasoningEffort: medium
         params:
           temperature: 1
           tool_choice: auto
@@ -35,17 +35,17 @@ llm:
         params:
           max_tokens: 180
       summarizer:
-        model: gpt-5-nano
-        reasoningEffort: low
+        model: gpt-4.1-mini
+        #reasoningEffort: medium
         params:
-          max_response_tokens: 200
+          max_response_tokens: 250
           temperature: 1
     openrouter:
       chat: z-ai/glm-4.5-air:free
       smart: z-ai/glm-4.5-air:free
       worker: z-ai/glm-4.5-air:free
 tools:
-  timeoutMs: 3500
+  timeoutMs: 1500
   parallelism: 12
   retryMax: 2
   backoffBaseMs: 50
@@ -60,7 +60,7 @@ tools:
     tmdb:
       timeoutMs: 2500
     plex:
-      timeoutMs: 6000
+      timeoutMs: 4000
   perTool:
     tmdb_search:
       timeoutMs: 2000
