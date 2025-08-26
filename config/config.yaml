@@ -13,20 +13,20 @@ llm:
     priority: [openai, openrouter]
     openai:
       chat:
-        model: gpt-5
+        model: gpt-5-mini
         reasoningEffort: minimal
         params:
           temperature: 1
           tool_choice: auto
       smart:
         model: gpt-5
-        reasoningEffort: medium
+        reasoningEffort: minimal
         params:
           temperature: 1
           tool_choice: auto
       worker:
         model: gpt-5-mini
-        reasoningEffort: medium
+        reasoningEffort: low
         params:
           temperature: 1
           tool_choice: auto

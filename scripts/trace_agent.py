@@ -95,6 +95,12 @@ async def run_once(user_message: str, max_events: int, pretty: bool) -> int:
     except Exception:
         print(str(resp))
 
+    # Best-effort resource cleanup to avoid aiohttp warnings
+    try:
+        await agent.aclose()
+    except Exception:
+        pass
+
     # Return 0 even if model errored; caller inspects output
     return 0
 

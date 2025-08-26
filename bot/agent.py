@@ -316,6 +316,8 @@ class Agent:
         return False
 
     async def _run_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, role: str, max_iters: int | None = None, stream_final_to_callback: Optional[Callable[[str], Any]] = None) -> Any:
+        # Sync pathway removed: delegate to async loop for a single implementation.
+        return await self._arun_tools_loop(base_messages, model, role, max_iters=max_iters, stream_final_to_callback=stream_final_to_callback)
         # Load runtime config for loop controls
         rc = load_runtime_config(self.project_root)
         # Role-specific iteration limits: prefer agentMaxIters/workerMaxIters, fallback to legacy maxIters
@@ -415,6 +417,10 @@ class Agent:
         write_phase_allowed = False
         require_validation_read = False
         seen_write_intent = False
+        write_completed = False
+        validation_done = False
+        last_added_tmdb_id: Optional[int] = None
+        last_added_title: Optional[str] = None
         for iter_idx in range(iters):
             self.log.info(f"agent iteration {iter_idx+1}/{iters}")
             
@@ -428,7 +434,7 @@ class Agent:
             tool_calls = getattr(msg, "tool_calls", None)
             if not tool_calls:
                 # If user intent requires a write, force a tools turn instead of finalizing
-                if must_write and not require_validation_read:
+                if must_write and not require_validation_read and not write_completed:
                     messages.append({
                         "role": "system",
                         "content": (
@@ -454,17 +460,19 @@ class Agent:
             except Exception:
                 pass
 
-            # Phase selection: read-only first, then writes; allow explicit validation reads after writes
-            if require_validation_read:
+            # Phase selection: read-only first, then writes; after a write, enforce read-only validation only
+            validation_planned_this_iter = False
+            if require_validation_read or (write_completed and not validation_done):
                 ro_calls = [tc for tc in tool_calls if not self._is_write_tool_name(getattr(getattr(tc, 'function', None), 'name', ''))]
-                if ro_calls:
-                    tool_calls = ro_calls
+                # Cap validation to a single quick read-only call
+                tool_calls = ro_calls[:1]
                 await self._emit_progress("phase.validation", {"iteration": f"{iter_idx+1}/{iters}"})
-                # Nudge the model for a quick read-only verification before finalizing
                 messages.append({
                     "role": "system",
                     "content": "Validation step: run exactly one quick read-only check (e.g., fetch the item/list) to confirm the write succeeded. Do not perform any write operations. Then finalize."
                 })
+                if tool_calls:
+                    validation_planned_this_iter = True
             elif not write_phase_allowed:
                 ro_calls = [tc for tc in tool_calls if not self._is_write_tool_name(getattr(getattr(tc, 'function', None), 'name', ''))]
                 if ro_calls:
@@ -554,11 +562,26 @@ class Agent:
                     "name": name,
                     "content": json.dumps(payload, separators=(",", ":")),
                 })
+                # Track last write attempt details for validation matching
+                try:
+                    if self._is_write_tool_name(str(name)) and isinstance(result, dict):
+                        if "radarr_add_movie" in str(name):
+                            # Try common shapes
+                            last_added_tmdb_id = (
+                                result.get("tmdbId") or result.get("tmdb_id") or result.get("tmdbid") or
+                                (result.get("movie", {}) or {}).get("tmdbId")
+                            )
+                            t = result.get("title") or (result.get("movie", {}) or {}).get("title")
+                            last_added_title = str(t) if t else last_added_title
+                except Exception:
+                    pass
             # Prune older tool messages to keep context small
             self._prune_old_tool_messages(messages, int(self._tuning_cfg.get("max_tool_msgs", 12)))
             # Post-write validation planning and finalize gating
             write_success = self._contains_write_success(flattened_results)
-            if write_success and not require_validation_read:
+            if write_success:
+                write_completed = True
+            if write_success and not require_validation_read and not validation_done:
                 require_validation_read = True
                 await self._emit_progress("phase.validation_planned", {"iteration": f"{iter_idx+1}/{iters}"})
                 # Instruct the model that a quick read-only validation comes next
@@ -566,14 +589,52 @@ class Agent:
                     "role": "system",
                     "content": "Write completed. Now perform a quick read-only validation (e.g., fetch the created/updated item) and then finalize. Do not perform any additional writes."
                 })
-            if require_validation_read and not write_success:
-                # We were in validation mode this turn; validation done, proceed to finalize next
+            # If we executed a validation read this turn, decide to finalize next turn
+            if validation_planned_this_iter:
                 require_validation_read = False
-                messages.append({
-                    "role": "system",
-                    "content": "Validation complete. Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."
-                })
-                force_finalize_next = True
+                validation_done = True
+                # Heuristic validation success: try to find the added item in lists
+                validation_success = None
+                try:
+                    def _iter_lists(d: Dict[str, Any]):
+                        for key in ("items", "results", "movies", "series", "episodes", "playlists", "collections"):
+                            val = d.get(key)
+                            if isinstance(val, list):
+                                for it in val:
+                                    yield it
+                    found = False
+                    for _tc_id, _n, res, _att, _ch in flattened_results:
+                        if isinstance(res, dict):
+                            for it in _iter_lists(res):
+                                try:
+                                    tmdb_match = (last_added_tmdb_id is not None) and (int(it.get("tmdbId") or it.get("tmdb_id") or -1) == int(last_added_tmdb_id))
+                                except Exception:
+                                    tmdb_match = False
+                                title_match = False
+                                try:
+                                    if last_added_title:
+                                        title_match = str(it.get("title") or "").strip().lower() == str(last_added_title).strip().lower()
+                                except Exception:
+                                    title_match = False
+                                if tmdb_match or title_match:
+                                    found = True
+                                    break
+                    validation_success = found
+                except Exception:
+                    validation_success = None
+                if validation_success is False:
+                    # Allow one more iteration to correct; do not force finalize yet
+                    messages.append({
+                        "role": "system",
+                        "content": "Validation indicates the write may not have taken effect. You may attempt one corrective action or clarify, then finalize."
+                    })
+                    force_finalize_next = False
+                else:
+                    messages.append({
+                        "role": "system",
+                        "content": "Validation complete. Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."
+                    })
+                    force_finalize_next = True
             else:
                 try:
                     allowed_to_finalize = self._results_indicate_finalizable(flattened_results)
@@ -726,9 +787,6 @@ class Agent:
         self.log.info(f"tool call requested: {name}")
         self.log.debug("tool args", extra={"name": name, "args": args_json})
         
-        # Emit tool start
-        await self._emit_progress("tool.start", {"name": name, "args": args_json})
-        
         # Parse args
         try:
             args = json.loads(args_json)
@@ -747,6 +805,9 @@ class Agent:
             # attempts=0 for dedup hit, cache_hit=True
             await self._emit_progress("tool.finish", {"name": name, "status": "ok", "duration_ms": 0, "attempts": 0, "cache_hit": True})
             return tc.id, name, result, 0, True
+
+        # Emit tool start only for actual executions (not dedup hits)
+        await self._emit_progress("tool.start", {"name": name, "args": args_json})
 
         # Execute with retries/backoff, timeout, and timing
         attempt = 0
@@ -863,6 +924,9 @@ class Agent:
                     return True
                 if "to my radarr" in text or "to radarr" in text or "into radarr" in text:
                     return True
+                # Bare 'add <title>' implies adding media
+                if "add" in text and not any(x in text for x in ("rating", "stars", "review", "note")):
+                    return True
             except Exception:
                 pass
             return False
@@ -916,6 +980,7 @@ class Agent:
         write_phase_allowed = False
         require_validation_read = False
         seen_write_intent = False
+        write_completed = False
         total_tool_calls = 0
         llm_calls_count = 0
         import time as _t
@@ -933,7 +998,7 @@ class Agent:
             msg = choice.message
             tool_calls = getattr(msg, 'tool_calls', None)
             if not tool_calls:
-                if must_write and not require_validation_read:
+                if must_write and (not write_completed) and (not require_validation_read):
                     messages.append({
                         "role": "system",
                         "content": (
@@ -959,11 +1024,10 @@ class Agent:
             except Exception:
                 pass
 
-            # Two-phase policy with explicit validation stage
-            if require_validation_read:
+            # Two-phase policy with explicit validation stage (strict: block further writes after first write)
+            if require_validation_read or write_completed:
                 ro_calls = [tc for tc in tool_calls if not self._is_write_tool_name(getattr(getattr(tc, 'function', None), 'name', ''))]
-                if ro_calls:
-                    tool_calls = ro_calls
+                tool_calls = ro_calls[:1]
                 await self._emit_progress("phase.validation", {"iteration": f"{iter_idx+1}/{iters}"})
                 messages.append({
                     "role": "system",
@@ -1065,6 +1129,8 @@ class Agent:
                 })
             # Post-write validation planning and finalize gating (mirrors sync path)
             write_success = self._contains_write_success(flattened_results)
+            if write_success:
+                write_completed = True
             if write_success and not require_validation_read:
                 require_validation_read = True
                 await self._emit_progress("phase.validation_planned", {"iteration": f"{iter_idx+1}/{iters}"})
@@ -1073,13 +1139,25 @@ class Agent:
                     "content": "Write completed. Now perform a quick read-only validation (e.g., fetch the created/updated item) and then finalize. Do not perform any additional writes."
                 })
             if require_validation_read and not write_success:
-                # We were in validation mode this turn; validation done, proceed to finalize next
+                # We were in validation mode this turn; validation done, finalize immediately
                 require_validation_read = False
                 messages.append({
                     "role": "system",
                     "content": "Validation complete. Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."
                 })
-                force_finalize_next = True
+                try:
+                    resp = await self._achat_once(messages, model, role, tool_choice_override="none")
+                    try:
+                        if getattr(self, "progress", None) is not None:
+                            self.progress.stop_heartbeat("agent")
+                    except Exception:
+                        pass
+                    await self._emit_progress("agent.finish", {"reason": "final_answer"})
+                    return resp
+                except Exception:
+                    # If finalization call fails, fall back to next-turn finalize
+                    force_finalize_next = True
+                    next_tool_choice_override = "none"
             else:
                 try:
                     allowed_to_finalize = self._results_indicate_finalizable(flattened_results)
@@ -1121,11 +1199,22 @@ class Agent:
                             except Exception:
                                 force_finalize_next = True
                         else:
-                            force_finalize_next = True
+                            # Finalize immediately without streaming
+                            try:
+                                resp = await self._achat_once(messages, model, role, tool_choice_override="none")
+                                try:
+                                    if getattr(self, "progress", None) is not None:
+                                        self.progress.stop_heartbeat("agent")
+                                except Exception:
+                                    pass
+                                await self._emit_progress("agent.finish", {"reason": "final_answer"})
+                                return resp
+                            except Exception:
+                                force_finalize_next = True
                 except Exception:
                     force_finalize_next = False
 
-            if force_finalize_next:
+            if force_finalize_next and (tool_calls is None or len(tool_calls) == 0):
                 next_tool_choice_override = "none"
 
         # Metrics
@@ -1210,7 +1299,7 @@ class Agent:
         from config.loader import resolve_llm_selection
         _, sel = resolve_llm_selection(self.project_root, "smart")
         model = sel.get("model", "gpt-5")
-        return await self._arun_tools_loop(messages, model=model, role="smart", max_iters=None)
+        return await self._arun_tools_loop(messages, model=model, role="smart", max_iters=None, stream_final_to_callback=stream_final_to_callback)
 
     def recommend(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         # Choose model from config
@@ -1242,5 +1331,27 @@ class Agent:
         _, sel = resolve_llm_selection(self.project_root, "smart")
         model = sel.get("model", "gpt-5")
         return await self._arun_tools_loop(messages, model=model, role="smart")
+
+    async def aclose(self) -> None:
+        """Close background tasks and shared network clients."""
+        # Close progress broadcaster tasks
+        try:
+            if getattr(self, "progress", None) is not None:
+                try:
+                    await self.progress.aclose()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Close shared aiohttp client (if any)
+        try:
+            from integrations.http_client import SharedHttpClient
+            try:
+                client = SharedHttpClient.instance()
+                await client.close()
+            except Exception:
+                pass
+        except Exception:
+            pass
 
 

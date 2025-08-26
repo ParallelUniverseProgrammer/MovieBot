@@ -258,9 +258,25 @@ def _pretty_tool_name(raw: str) -> str:
     if r.startswith("plex_") or r.startswith("get_plex"):
         return "Plex library scan"
     if r.startswith("radarr_"):
-        return "Radarr add"
+        if "add" in r:
+            return "Radarr add"
+        if "delete" in r:
+            return "Radarr delete"
+        if "update" in r:
+            return "Radarr update"
+        if "search" in r or "lookup" in r:
+            return "Radarr search"
+        return "Radarr fetch"
     if r.startswith("sonarr_"):
-        return "Sonarr add"
+        if "add" in r:
+            return "Sonarr add"
+        if "delete" in r:
+            return "Sonarr delete"
+        if "update" in r:
+            return "Sonarr update"
+        if "search" in r or "lookup" in r:
+            return "Sonarr search"
+        return "Sonarr fetch"
     return r.replace('_', ' ')
 
 

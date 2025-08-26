@@ -22,6 +22,8 @@ def build_minimal_system_prompt() -> str:
         " Use bullet points with '-' and list each item as **Title (Year)** with a tag `[Plex]`, `[Add via Radarr]`, or `[Add via Sonarr]`."
         "\nLOOP: Understand → Plan → Act → Check → Refine → Finish. Keep a tiny internal task list; do not expose it."
         "\nSPEED: Minimize assistant turns and tool calls. If multiple leads exist, issue them together in one turn (parallel). Reuse caches; avoid duplicates."
+        " Default target: ≤3 assistant turns (Turn 1: gather with read-only tools; Turn 2: write; Turn 3: validate and finalize). Leave any remaining turn budget unused if the goal is met."
+        " Avoid 'planning-only' turns: if you have enough information, either issue the full set of necessary tool calls now or finalize."
         " When uncertain, plan briefly and choose decisively; prefer issuing all viable calls in one pass over iterative micro-steps."
         " Ask at most one concise clarifying question only if intent is truly ambiguous; otherwise proceed with the best assumption and note it briefly."
         " Stop once the goal is met."
@@ -35,7 +37,7 @@ def build_minimal_system_prompt() -> str:
         "\n- If key fields are missing, call `fetch_cached_result(ref_id)` with just the needed fields (overview, genres, runtime, providers)."
         "\n- Batch similar calls (e.g., multiple TMDb searches) in one turn; group where possible."
         "\n- Two-phase policy: first gather with read-only tools to identify exact targets; then perform writes."
-        "\n- After any write, run a quick read validation (e.g., search/GET) to confirm success before finalizing."
+        "\n- After any write, run a quick read validation (e.g., search/GET) to confirm success before finalizing. Then finalize immediately in the next turn with no further planning or tool calls unless validation indicates a problem."
         "\nDECISIONS & DEFAULTS:"
         "\n- Do not ask for confirmation to add; if intent implies add, proceed with best match (highest vote_count, rating, recency vs requested year)."
         " If ambiguous between ≤2, choose the stronger signal and note the alternative in Notes."
@@ -46,7 +48,7 @@ def build_minimal_system_prompt() -> str:
         "\n- Keep outputs crisp: top 3 items max unless user asks for more."
         "\n- Never invent data. If unknown, say 'unknown/not found' and briefly state what you tried."
         "\n- Be courteous in errors: a single brief apology if something fails once, then provide the best available alternative."
-        "\nFINALIZATION: After tool outputs are appended, produce a concise, friendly user-facing reply without additional tool calls and do not echo instructions or headings. Do not include any sign-off or closing phrase."
+        "\nFINALIZATION: After tool outputs are appended, produce a concise, friendly user-facing reply without additional tool calls and do not echo instructions or headings. Do not include any sign-off or closing phrase. If a write was validated successfully, finalize immediately; do not spend further turns on reassessment."
         " Progress feedback is handled externally; you only return the final message."
     )
 
@@ -65,7 +67,7 @@ def build_agent_system_prompt(parallelism: int, max_iters_hint: int | None = Non
     )
     iter_text = (
         f" You have up to {max_iters_hint} assistant turns available for this conversation; "
-        "use them efficiently to fully satisfy the user's request without unnecessary follow-ups."
+        "aim to finish in ≤3 turns when feasible and leave unused turns on the table. Use the budget efficiently to fully satisfy the user's request without unnecessary follow-ups."
         if max_iters_hint is not None else ""
     )
     return base + hint + iter_text
