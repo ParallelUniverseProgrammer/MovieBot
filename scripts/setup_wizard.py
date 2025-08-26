@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -9,33 +8,74 @@ import yaml
 import curses
 import textwrap
 import webbrowser
+import getpass
 
 
 def _prompt(key: str, default: str | None = None, secret: bool = False) -> str:
-    label = f"{key}{' [' + default + ']' if default else ''}: "
+    label = f"{key}"
+    if not secret and default:
+        label += f" [{default}]"
+    label += ": "
     if secret:
-        # Basic secret prompt without echoing is non-trivial cross-platform; keep simple
-        value = input(label)
+        value = getpass.getpass(label)
     else:
         value = input(label)
-    if not value and default is not None:
+    if (value is None or value == "") and default is not None:
         return default
-    return value
+    return value.strip()
 
 
-def _write_env(project_root: Path, env_updates: Dict[str, str]) -> None:
+def _load_env_file(project_root: Path) -> Dict[str, str]:
+    """Load key=value pairs from .env, ignoring comments and preserving simple values.
+
+    Does not modify the environment. Handles optional 'export ' prefix and ignores blank lines.
+    """
+    env_values: Dict[str, str] = {}
     env_path = project_root / ".env"
-    existing = {}
-    if env_path.exists():
+    if not env_path.exists():
+        return env_values
+    try:
         with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if "=" in line:
-                    k, v = line.strip().split("=", 1)
-                    existing[k] = v
-    existing.update(env_updates)
-    lines = [f"{k}={v}\n" for k, v in existing.items()]
-    with open(env_path, "w", encoding="utf-8") as f:
-        f.writelines(lines)
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("export "):
+                    line = line[len("export ") :]
+                if "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                env_values[k.strip()] = v.strip()
+    except Exception:
+        # Be permissive: if parsing fails, just return what we have
+        pass
+    return env_values
+
+
+def _write_env(project_root: Path, env_updates: Dict[str, str]) -> Tuple[bool, Path | None, Path | None]:
+    """Safely persist env values.
+
+    Returns (written, env_path_if_written, suggested_path_if_not_written).
+    - If .env exists: DO NOT MODIFY. Writes suggestions to .env.wizard.suggested and returns (False, None, suggest_path).
+    - If .env does not exist: Creates it with provided values and returns (True, env_path, None).
+    Empty values are ignored.
+    """
+    env_path = project_root / ".env"
+    filtered: Dict[str, str] = {k: v for k, v in env_updates.items() if isinstance(v, str) and v.strip() != ""}
+    if env_path.exists():
+        # Never overwrite existing .env; provide a suggested file instead
+        if not filtered:
+            return (False, None, None)
+        suggest_path = project_root / ".env.wizard.suggested"
+        with open(suggest_path, "w", encoding="utf-8") as f:
+            for k, v in filtered.items():
+                f.write(f"{k}={v}\n")
+        return (False, None, suggest_path)
+    else:
+        with open(env_path, "w", encoding="utf-8") as f:
+            for k, v in filtered.items():
+                f.write(f"{k}={v}\n")
+        return (True, env_path, None)
 
 
 def _write_config(project_root: Path, config_obj: Dict[str, Any]) -> None:
@@ -82,30 +122,34 @@ def run_interactive(project_root: Path) -> None:
 
     print("MovieBot setup wizard (fallback)\n")
 
+    # Prefill from existing .env without modifying it
+    existing_env = _load_env_file(project_root)
+
     print("Discord")
-    discord_token = _prompt("DISCORD_TOKEN", secret=True)
-    application_id = _prompt("APPLICATION_ID (from Discord Developer Portal)", default="")
-    dev_guild = _prompt("DISCORD_GUILD_ID (dev guild, optional)", default="")
+    discord_token = _prompt("DISCORD_TOKEN", default=existing_env.get("DISCORD_TOKEN"), secret=True)
+    application_id = _prompt("APPLICATION_ID (from Discord Developer Portal)", default=existing_env.get("APPLICATION_ID", ""))
+    dev_guild = _prompt("DISCORD_GUILD_ID (dev guild, optional)", default=existing_env.get("DISCORD_GUILD_ID", ""))
 
     print("\nOpenAI")
-    openai_key = _prompt("OPENAI_API_KEY", secret=True)
+    openai_key = _prompt("OPENAI_API_KEY", default=existing_env.get("OPENAI_API_KEY"), secret=True)
 
     print("\nPlex")
-    plex_base = _prompt("PLEX_BASE_URL", default="http://localhost:32400")
-    plex_token = _prompt("PLEX_TOKEN", secret=True)
+    plex_base = _prompt("PLEX_BASE_URL", default=existing_env.get("PLEX_BASE_URL", "http://localhost:32400"))
+    plex_token = _prompt("PLEX_TOKEN", default=existing_env.get("PLEX_TOKEN"), secret=True)
 
     print("\nRadarr")
-    radarr_base = _prompt("RADARR_BASE_URL", default="http://localhost:7878")
-    radarr_key = _prompt("RADARR_API_KEY", secret=True)
+    radarr_base = _prompt("RADARR_BASE_URL", default=existing_env.get("RADARR_BASE_URL", "http://localhost:7878"))
+    radarr_key = _prompt("RADARR_API_KEY", default=existing_env.get("RADARR_API_KEY"), secret=True)
 
     print("\nSonarr")
-    sonarr_base = _prompt("SONARR_BASE_URL", default="http://localhost:8989")
-    sonarr_key = _prompt("SONARR_API_KEY", secret=True)
+    sonarr_base = _prompt("SONARR_BASE_URL", default=existing_env.get("SONARR_BASE_URL", "http://localhost:8989"))
+    sonarr_key = _prompt("SONARR_API_KEY", default=existing_env.get("SONARR_API_KEY"), secret=True)
 
     print("\nTMDb")
-    tmdb_key = _prompt("TMDB_API_KEY", secret=True)
+    tmdb_key = _prompt("TMDB_API_KEY", default=existing_env.get("TMDB_API_KEY"), secret=True)
 
-    _write_env(project_root, {
+    # Only write keys that are missing or changed vs existing .env
+    desired_env: Dict[str, str] = {
         "DISCORD_TOKEN": discord_token,
         "APPLICATION_ID": application_id,
         "DISCORD_GUILD_ID": dev_guild,
@@ -117,7 +161,9 @@ def run_interactive(project_root: Path) -> None:
         "SONARR_BASE_URL": sonarr_base,
         "SONARR_API_KEY": sonarr_key,
         "TMDB_API_KEY": tmdb_key,
-    })
+    }
+    diff_env = {k: v for k, v in desired_env.items() if v is not None and v != "" and existing_env.get(k) != v}
+    env_written, env_path, suggest_path = _write_env(project_root, diff_env)
 
     print("\nFetching Radarr/Sonarr defaults requires API calls; you can set them later in config/config.yaml.")
     radarr_profile_id = _prompt("Default Radarr qualityProfileId (e.g. 1)", default="")
@@ -139,7 +185,12 @@ def run_interactive(project_root: Path) -> None:
     _write_config(project_root, config_obj)
     _write_household_prefs(project_root)
 
-    print("\nSaved .env, config/config.yaml, and data/household_preferences.json")
+    if env_written:
+        print("\nSaved .env, config/config.yaml, and data/household_preferences.json")
+    elif suggest_path is not None:
+        print(f"\nSaved config/config.yaml and data/household_preferences.json. Existing .env left untouched. Suggestions written to: {suggest_path}")
+    else:
+        print("\nSaved config/config.yaml and data/household_preferences.json. Existing .env left untouched.")
     print("Next: invite your Discord bot to a server and run: python -m bot.discord_bot")
 
 
@@ -318,17 +369,7 @@ class _Wizard:
         ]
 
     def _prefill_from_env(self) -> None:
-        env_path = self.project_root / ".env"
-        if not env_path.exists():
-            return
-        try:
-            with open(env_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    if "=" in line:
-                        k, v = line.strip().split("=", 1)
-                        self.env_values[k] = v
-        except Exception:
-            pass
+        self.env_values.update(_load_env_file(self.project_root))
 
     def _draw_header(self, stdscr: "curses._CursesWindow") -> None:  # type: ignore[name-defined]
         h, w = stdscr.getmaxyx()
@@ -380,7 +421,10 @@ class _Wizard:
 
         # Footer
         y = h - 3
-        stdscr.hline(y, 0, ord('─'), w)
+        try:
+            stdscr.hline(y, 0, curses.ACS_HLINE, w)
+        except Exception:
+            stdscr.hline(y, 0, ord('-'), w)
         y += 1
         stdscr.addstr(y, 2, "Keys: n=next  b=back  o=open link  h=toggle help  q=quit")
 
@@ -458,7 +502,9 @@ class _Wizard:
         return True
 
     def _save(self) -> None:
-        _write_env(self.project_root, self.env_values)
+        existing = _load_env_file(self.project_root)
+        to_write = {k: v for k, v in self.env_values.items() if isinstance(v, str) and v.strip() != "" and existing.get(k) != v}
+        self._last_save_result = _write_env(self.project_root, to_write)
         config_obj = {
             "household": {"displayName": "Household"},
             "radarr": self.config_values.get("radarr", {}),
@@ -469,7 +515,25 @@ class _Wizard:
 
     def _draw_done(self, stdscr: "curses._CursesWindow") -> None:  # type: ignore[name-defined]
         stdscr.clear()
-        msg = "Saved .env, config/config.yaml, and data/household_preferences.json\nPress any key to exit."
+        env_written = False
+        env_path: Path | None = None
+        suggest_path: Path | None = None
+        if hasattr(self, "_last_save_result") and self._last_save_result is not None:
+            env_written, env_path, suggest_path = self._last_save_result
+        if env_written:
+            msg = "Saved .env, config/config.yaml, and data/household_preferences.json\nPress any key to exit."
+        elif suggest_path is not None:
+            msg = (
+                "Saved config/config.yaml and data/household_preferences.json\n"
+                f"Existing .env left untouched. Suggestions written to: {suggest_path}\n"
+                "Press any key to exit."
+            )
+        else:
+            msg = (
+                "Saved config/config.yaml and data/household_preferences.json\n"
+                "Existing .env left untouched.\n"
+                "Press any key to exit."
+            )
         stdscr.addstr(2, 2, msg)
         stdscr.refresh()
 
