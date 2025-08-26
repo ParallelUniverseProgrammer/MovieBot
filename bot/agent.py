@@ -157,6 +157,8 @@ class Agent:
                 # Non-fatal if prefs missing or unparsable
                 pass
         messages += base_messages
+        # Deduplicate identical tool calls within a run to reduce latency
+        dedup_cache: Dict[str, Any] = {}
         last_response: Any = None
         for iter_idx in range(iters):
             self.log.info(f"agent iteration {iter_idx+1}/{iters}")
@@ -201,10 +203,10 @@ class Agent:
             async def run_one_or_batch(tc_or_group):
                 if isinstance(tc_or_group, list):
                     # Batch execution
-                    return await self._execute_tool_batch(tc_or_group, timeout_ms, retry_max, backoff_base_ms)
+                    return await self._execute_tool_batch(tc_or_group, timeout_ms, retry_max, backoff_base_ms, dedup_cache)
                 else:
                     # Single tool execution
-                    return await self._execute_single_tool(tc_or_group, timeout_ms, retry_max, backoff_base_ms)
+                    return await self._execute_single_tool(tc_or_group, timeout_ms, retry_max, backoff_base_ms, dedup_cache)
 
             # Run with bounded concurrency
             sem = asyncio.Semaphore(parallelism)
@@ -256,7 +258,7 @@ class Agent:
                 except Exception:
                     pass
             # Force finalization pass with tool_choice="none" to reduce extra tool turns
-            messages.append({"role": "system", "content": "Finalize now: produce a concise user-facing reply with no meta-instructions or headings. Do not call tools."})
+            messages.append({"role": "system", "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."})
             final_resp = await self._achat_once(messages, model, role, tool_choice_override="none")
             try:
                 final_tc = getattr(final_resp.choices[0].message, "tool_calls", None)
@@ -341,8 +343,8 @@ class Agent:
         
         return first_name in batchable_tools
 
-    async def _execute_single_tool(self, tc: Any, timeout_ms: int, retry_max: int, backoff_base_ms: int) -> tuple:
-        """Execute a single tool with retries and timing."""
+    async def _execute_single_tool(self, tc: Any, timeout_ms: int, retry_max: int, backoff_base_ms: int, dedup_cache: Optional[Dict[str, Any]] = None) -> tuple:
+        """Execute a single tool with retries and timing. Includes in-run de-duplication."""
         name = tc.function.name
         args_json = tc.function.arguments or "{}"
         self.log.info(f"tool call requested: {name}")
@@ -361,6 +363,17 @@ class Agent:
         except json.JSONDecodeError as e:
             payload = {"ok": False, "error": "invalid_json", "details": str(e)}
             return tc.id, name, payload, 0, False
+
+        # De-duplicate identical tool calls within the same run
+        try:
+            dedup_key = f"{name}:{json.dumps(args, sort_keys=True, separators=(',', ':'))}"
+        except Exception:
+            dedup_key = None
+        if dedup_cache is not None and dedup_key is not None and dedup_key in dedup_cache:
+            self.log.info("tool dedup cache hit", extra={"name": name})
+            result = dedup_cache[dedup_key]
+            # attempts=0 for dedup hit, cache_hit=True
+            return tc.id, name, result, 0, True
 
         # Execute with retries/backoff, timeout, and timing
         attempt = 0
@@ -393,6 +406,10 @@ class Agent:
             await asyncio.sleep((backoff_base_ms / 1000) * (2 ** attempt) + jitter)
             attempt += 1
         duration_ms = int((time.monotonic() - start) * 1000)
+        # Store in dedup cache for subsequent identical calls
+        if dedup_cache is not None and dedup_key is not None and status == "ok":
+            dedup_cache[dedup_key] = result
+
         self.log.info("tool done", extra={"name": name, "status": status, "duration_ms": duration_ms, "attempts": attempt + 1, "cache_hit": cache_hit})
         # Notify progress callback about tool completion
         if self.progress_callback:
@@ -402,14 +419,14 @@ class Agent:
                 pass
         return tc.id, name, result, attempt + 1, cache_hit
 
-    async def _execute_tool_batch(self, tool_batch: List[Any], timeout_ms: int, retry_max: int, backoff_base_ms: int) -> List[tuple]:
+    async def _execute_tool_batch(self, tool_batch: List[Any], timeout_ms: int, retry_max: int, backoff_base_ms: int, dedup_cache: Optional[Dict[str, Any]] = None) -> List[tuple]:
         """Execute a batch of similar tools concurrently."""
         if not tool_batch:
             return []
         
         # Execute all tools in the batch concurrently
         batch_results = await asyncio.gather(*[
-            self._execute_single_tool(tc, timeout_ms, retry_max, backoff_base_ms)
+            self._execute_single_tool(tc, timeout_ms, retry_max, backoff_base_ms, dedup_cache)
             for tc in tool_batch
         ])
         
@@ -464,6 +481,8 @@ class Agent:
                 # Non-fatal if prefs missing or unparsable
                 pass
         messages += base_messages
+        # Deduplicate identical tool calls within a run to reduce latency
+        dedup_cache: Dict[str, Any] = {}
         last_response: Any = None
         for iter_idx in range(iters):
             self.log.info(f"agent iteration {iter_idx+1}/{iters}")
@@ -508,10 +527,10 @@ class Agent:
             async def run_one_or_batch(tc_or_group):
                 if isinstance(tc_or_group, list):
                     # Batch execution
-                    return await self._execute_tool_batch(tc_or_group, timeout_ms, retry_max, backoff_base_ms)
+                    return await self._execute_tool_batch(tc_or_group, timeout_ms, retry_max, backoff_base_ms, dedup_cache)
                 else:
                     # Single tool execution
-                    return await self._execute_single_tool(tc_or_group, timeout_ms, retry_max, backoff_base_ms)
+                    return await self._execute_single_tool(tc_or_group, timeout_ms, retry_max, backoff_base_ms, dedup_cache)
 
             # Run with bounded concurrency
             sem = asyncio.Semaphore(parallelism)
@@ -559,7 +578,7 @@ class Agent:
                     self.progress_callback("finalizing", "synthesizing reply")
                 except Exception:
                     pass
-            messages.append({"role": "system", "content": "Finalize now: produce a concise user-facing reply with no meta-instructions or headings. Do not call tools."})
+            messages.append({"role": "system", "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."})
             final_resp = await self._achat_once(messages, model, role, tool_choice_override="none")
             try:
                 final_tc = getattr(final_resp.choices[0].message, "tool_calls", None)

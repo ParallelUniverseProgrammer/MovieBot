@@ -44,6 +44,13 @@ class SharedHttpClient:
             ttl_dns_cache=300,  # DNS cache TTL of 5 minutes
         )
         
+        # Create session lazily if loop is running; otherwise defer until first request
+        loop = None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
         self._session = aiohttp.ClientSession(
             timeout=timeout,
             connector=connector,
@@ -51,6 +58,7 @@ class SharedHttpClient:
         )
         self._cfg = cfg
         self._closed = False
+        self._loop = asyncio.get_event_loop() if loop is not None else None
 
     @classmethod
     def instance(cls) -> "SharedHttpClient":
@@ -83,6 +91,32 @@ class SharedHttpClient:
     async def request(self, method: str, url: str, *, params: Optional[Dict[str, Any]] = None,
                       json: Any = None, headers: Optional[Dict[str, str]] = None,
                       allow_retry_on_methods: Optional[set] = None) -> aiohttp.ClientResponse:
+        # If the original loop was closed (e.g., after certain test runners), rebuild the session on the current loop
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if (self._loop is not None and current_loop is not self._loop) or (current_loop and self._closed):
+            # Reinitialize session bound to the current loop
+            await self.close()
+            cfg = self._cfg
+            timeout = aiohttp.ClientTimeout(
+                total=cfg.total_timeout_ms / 1000.0,
+                connect=cfg.connect_timeout_ms / 1000.0,
+                sock_read=cfg.read_timeout_ms / 1000.0,
+            )
+            connector = aiohttp.TCPConnector(
+                limit=cfg.max_connections,
+                limit_per_host=cfg.max_connections // 4,
+                keepalive_timeout=30,
+                enable_cleanup_closed=True,
+                ssl=True,
+                use_dns_cache=True,
+                ttl_dns_cache=300,
+            )
+            self._session = aiohttp.ClientSession(timeout=timeout, connector=connector, headers={})
+            self._closed = False
+            self._loop = current_loop
         allow_retry_on_methods = allow_retry_on_methods or {"GET", "HEAD", "OPTIONS"}
         attempt = 0
         last_exc: Optional[Exception] = None

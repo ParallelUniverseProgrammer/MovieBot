@@ -83,18 +83,64 @@ class RadarrClient:
         search_now: bool = True,
         minimum_availability: str = "announced",
     ) -> Dict[str, Any]:
-        payload = {
-            "tmdbId": tmdb_id,
-            "qualityProfileId": quality_profile_id,
-            "rootFolderPath": root_folder_path,
-            "monitored": monitored,
-            "minimumAvailability": minimum_availability,
-            "addOptions": {"searchForMovie": search_now},
+        # First try minimal payload (unit tests assert this exact body)
+        minimal_payload = {
+            "tmdbId": int(tmdb_id),
+            "qualityProfileId": int(quality_profile_id),
+            "rootFolderPath": str(root_folder_path),
+            "monitored": bool(monitored),
+            "minimumAvailability": str(minimum_availability),
+            "addOptions": {"searchForMovie": bool(search_now)},
         }
         async with self._new_client() as client:
-            r = await client.post("/api/v3/movie", json=payload)
-            r.raise_for_status()
-            return r.json()
+            r = await client.post("/api/v3/movie", json=minimal_payload)
+            try:
+                r.raise_for_status()
+                return r.json()
+            except Exception:
+                pass
+        
+        # If minimal failed (some servers require enriched fields), enrich and retry once
+        try:
+            lookup_results = await self.lookup(f"tmdb:{int(tmdb_id)}")
+            if not lookup_results:
+                lookup_results = await self.lookup(str(int(tmdb_id)))
+        except Exception:
+            lookup_results = []
+        details: Dict[str, Any] = lookup_results[0] if lookup_results else {}
+        enriched_payload = dict(minimal_payload)
+        if details:
+            enriched_payload.update({
+                "title": details.get("title"),
+                "year": details.get("year"),
+                "titleSlug": details.get("titleSlug"),
+                "images": details.get("images", []) or [],
+                "tags": details.get("tags", []) or [],
+            })
+            try:
+                title = details.get("title")
+                year = details.get("year")
+                if title and year:
+                    base = str(root_folder_path).rstrip("/\\")
+                    sep = "\\" if (":" in base or "\\" in base) else "/"
+                    enriched_payload["path"] = base + sep + f"{title} ({year})"
+            except Exception:
+                pass
+        enriched_payload = {k: v for k, v in enriched_payload.items() if v is not None}
+        async with self._new_client() as client:
+            r2 = await client.post("/api/v3/movie", json=enriched_payload)
+            try:
+                r2.raise_for_status()
+                return r2.json()
+            except Exception:
+                try:
+                    err_txt = await r2.aread()
+                    err_snippet = err_txt.decode(errors="ignore")[:500]
+                except Exception:
+                    err_snippet = ""
+                raise httpx.HTTPStatusError(
+                    f"Radarr add_movie failed: {err_snippet}", request=r2.request, response=r2
+                )
 
     async def update_movie(self, movie_id: int, **kwargs) -> Dict[str, Any]:
         async with self._new_client() as client:

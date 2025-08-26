@@ -105,9 +105,22 @@ class PlexClient:
         return section_type.title()
 
     def search_movies(self, query: str, response_level: Optional[ResponseLevel] = None) -> List[Dict[str, Any]]:
-        """Search for movies with configurable response detail."""
+        """Search for movies with configurable response detail.
+
+        Returns serialized dicts to keep the API consistent with the rest of the client,
+        but also attaches a `ratingKey` attribute-like access shim for common usage patterns
+        in existing callers that may expect plexapi objects.
+        """
         results = self.plex.search(query, mediatype="movie")
-        return self._serialize_items(results, response_level)
+        serialized = self._serialize_items(results, response_level)
+
+        # Provide a lightweight attribute-access shim on each dict for compatibility with
+        # callers that access `m.title` or `m.ratingKey`. This avoids breaking integrations
+        # while keeping transport as dicts for consistency.
+        class _AttrShim(dict):
+            __getattr__ = dict.get  # type: ignore[assignment]
+
+        return [_AttrShim(d) for d in serialized]
 
     def search_shows(self, query: str, response_level: Optional[ResponseLevel] = None) -> List[Dict[str, Any]]:
         """Search for TV shows with configurable response detail."""
@@ -396,9 +409,12 @@ class PlexClient:
         """Get current playback status across all clients."""
         try:
             sessions = self.plex.sessions()
+            # Ensure session serialization includes user/client by promoting to STANDARD when needed
+            level = response_level or self.default_response_level
+            session_level = level if level in [ResponseLevel.STANDARD, ResponseLevel.DETAILED] else ResponseLevel.STANDARD
             return {
                 "active_sessions": len(sessions),
-                "sessions": [self._serialize_session(session, response_level) for session in sessions]
+                "sessions": [self._serialize_session(session, session_level) for session in sessions]
             }
         except Exception:
             return {"active_sessions": 0, "sessions": []}
@@ -555,12 +571,25 @@ class PlexClient:
         level = response_level or self.default_response_level
         
         base_data = {
-            "title": session.title,
-            "type": session.type
+            "title": getattr(session, "title", None),
+            "type": getattr(session, "type", None)
         }
         
         if level in [ResponseLevel.STANDARD, ResponseLevel.DETAILED]:
-            base_data["user"] = getattr(session, "username", "Unknown")
+            # plexapi may expose user via .usernames, .username, or session.account
+            user_name = getattr(session, "username", None)
+            if not user_name:
+                try:
+                    acc = getattr(session, "account", None)
+                    user_name = getattr(acc, "title", None) if acc is not None else None
+                except Exception:
+                    user_name = None
+            if not user_name:
+                # Some environments expose a nested dict-like user
+                u = getattr(session, "user", None)
+                if isinstance(u, dict):
+                    user_name = u.get("title") or u.get("name")
+            base_data["user"] = user_name or "Unknown"
             base_data["progress"] = getattr(session, "progress", 0)
             base_data["duration"] = getattr(session, "duration", 0)
             # session.player is a Player object in plexapi with a .product attribute.

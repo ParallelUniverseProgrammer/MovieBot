@@ -171,7 +171,7 @@ Remember: Search for ALL episodes, not just some of them!
                 ]
                 
                 # Force finalization without further tool calls
-                final_messages.append({"role": "system", "content": "Finalize now: produce a concise user-facing reply with no meta-instructions or headings. Do not call tools."})
+                final_messages.append({"role": "system", "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."})
                 final_response = await self._achat_once(final_messages, model, "worker", tool_choice_override="none")
                 final_content = final_response.choices[0].message.content or ""
                 
@@ -210,7 +210,17 @@ Remember: Search for ALL episodes, not just some of them!
             }
 
     async def _execute_tool_calls(self, tool_calls: List[Any]) -> List[Dict[str, Any]]:
-        """Execute tool calls concurrently and return results in order."""
+        """Execute tool calls concurrently and return results in order. Deduplicates identical calls within a batch."""
+        def _key_for(tc: Any) -> str:
+            name = getattr(tc.function, "name", "<unknown>")
+            args_json = getattr(tc.function, "arguments", "{}") or "{}"
+            try:
+                parsed = json.loads(args_json)
+                norm = json.dumps(parsed, sort_keys=True, separators=(",", ":"))
+            except Exception:
+                norm = str(args_json)
+            return f"{name}:{norm}"
+
         async def _run_one(tc):
             name = getattr(tc.function, "name", "<unknown>")
             args_json = getattr(tc.function, "arguments", "{}") or "{}"
@@ -234,8 +244,29 @@ Remember: Search for ALL episodes, not just some of them!
                 self.log.error(f"Error executing tool {name}: {e}")
                 return {"ok": False, "error": str(e)}
 
-        # Execute all tool calls concurrently preserving order
-        return await asyncio.gather(*[_run_one(tc) for tc in tool_calls])
+        # Deduplicate while preserving original order
+        seen_keys = set()
+        unique_tool_calls: List[Any] = []
+        for tc in tool_calls:
+            k = _key_for(tc)
+            if k in seen_keys:
+                continue
+            seen_keys.add(k)
+            unique_tool_calls.append(tc)
+
+        if len(unique_tool_calls) != len(tool_calls):
+            self.log.info(f"Sub-agent deduplicated {len(tool_calls) - len(unique_tool_calls)} duplicate tool call(s)")
+
+        # Execute unique calls concurrently
+        unique_results = await asyncio.gather(*[_run_one(tc) for tc in unique_tool_calls])
+
+        # Map results back to the original tool_calls order
+        key_to_result: Dict[str, Dict[str, Any]] = {}
+        for tc, res in zip(unique_tool_calls, unique_results):
+            key_to_result[_key_for(tc)] = res
+
+        ordered_results: List[Dict[str, Any]] = [key_to_result[_key_for(tc)] for tc in tool_calls]
+        return ordered_results
 
     async def handle_quality_fallback(self, series_id: int, target_quality: str, 
                                     fallback_qualities: List[str]) -> Dict[str, Any]:
@@ -296,7 +327,7 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
                     for tc, result in zip(tool_calls, results)
                 ]
                 
-                final_messages.append({"role": "system", "content": "Finalize now: produce a concise user-facing reply with no meta-instructions or headings. Do not call tools."})
+                final_messages.append({"role": "system", "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."})
                 final_response = await self._achat_once(final_messages, model, "worker", tool_choice_override="none")
                 return {
                     "success": True,

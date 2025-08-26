@@ -74,6 +74,43 @@ class TestRegistryLiveTools:
             assert isinstance(out, dict)
 
     @pytest.mark.asyncio
+    async def test_radarr_add_movie_tool_end_to_end(self, registry, radarr_config):
+        """Exercise the radarr_add_movie tool end-to-end against live Radarr.
+
+        Validates that the tool accepts explicit params and that the added
+        movie can be confirmed via the Radarr client, then removed.
+        """
+        reg = registry
+        assert "radarr_add_movie" in reg.schema_map()
+
+        from integrations.radarr_client import RadarrClient
+        rc = RadarrClient(radarr_config["url"], radarr_config["api_key"])
+        profiles = await rc.quality_profiles()
+        roots = await rc.root_folders()
+        if not profiles or not roots:
+            pytest.skip("Radarr profiles or roots missing")
+        profile_id = int(profiles[0]["id"]) if isinstance(profiles[0], dict) else int(profiles[0].get("id"))
+        root_path = roots[0]["path"] if isinstance(roots[0], dict) else roots[0].get("path")
+
+        tmdb_id = 603
+        add_args = {
+            "tmdb_id": tmdb_id,
+            "quality_profile_id": profile_id,
+            "root_folder_path": root_path,
+            "monitored": True,
+            "search_now": False,
+        }
+        result = await reg.get("radarr_add_movie")(add_args)
+        assert isinstance(result, dict)
+        created_id = result.get("id") or result.get("movieId")
+        assert created_id is not None
+
+        movies = await rc.get_movies()
+        assert any(m.get("tmdbId") == tmdb_id for m in movies)
+        await rc.delete_movie(created_id, delete_files=False, add_import_list_exclusion=False)
+        await rc.close()
+
+    @pytest.mark.asyncio
     async def test_sonarr_tools_smoke(self, registry, sonarr_config):
         for name, args in [
             ("sonarr_system_status", {}),
