@@ -210,7 +210,14 @@ Remember: Search for ALL episodes, not just some of them!
             }
 
     async def _execute_tool_calls(self, tool_calls: List[Any]) -> List[Dict[str, Any]]:
-        """Execute tool calls concurrently and return results in order. Deduplicates identical calls within a batch."""
+        """Execute tool calls concurrently with bounded concurrency and timeouts.
+
+        - Deduplicates identical calls in-batch
+        - Respects tools.timeoutMs and tools.parallelism from runtime config
+        """
+        rc = load_runtime_config(self.project_root)
+        timeout_ms = int((rc.get("tools", {}) or {}).get("timeoutMs", 8000))
+        parallelism = int((rc.get("tools", {}) or {}).get("parallelism", 4))
         def _key_for(tc: Any) -> str:
             name = getattr(tc.function, "name", "<unknown>")
             args_json = getattr(tc.function, "arguments", "{}") or "{}"
@@ -237,7 +244,10 @@ Remember: Search for ALL episodes, not just some of them!
                     self.log.error(f"Tool {name} not found in registry")
                     return {"ok": False, "error": f"Tool {name} not found in registry"}
 
-                result = await tool_func(args)
+                try:
+                    result = await asyncio.wait_for(tool_func(args), timeout=timeout_ms / 1000)
+                except asyncio.TimeoutError:
+                    return {"ok": False, "error": "timeout", "timeout_ms": timeout_ms, "name": name}
                 self.log.info(f"Tool {name} completed with result: {str(result)[:200]}...")
                 return result
             except Exception as e:
@@ -257,8 +267,12 @@ Remember: Search for ALL episodes, not just some of them!
         if len(unique_tool_calls) != len(tool_calls):
             self.log.info(f"Sub-agent deduplicated {len(tool_calls) - len(unique_tool_calls)} duplicate tool call(s)")
 
-        # Execute unique calls concurrently
-        unique_results = await asyncio.gather(*[_run_one(tc) for tc in unique_tool_calls])
+        # Execute unique calls concurrently with bounded parallelism
+        sem = asyncio.Semaphore(parallelism)
+        async def _sem_wrapped(tc):
+            async with sem:
+                return await _run_one(tc)
+        unique_results = await asyncio.gather(*[_sem_wrapped(tc) for tc in unique_tool_calls])
 
         # Map results back to the original tool_calls order
         key_to_result: Dict[str, Dict[str, Any]] = {}

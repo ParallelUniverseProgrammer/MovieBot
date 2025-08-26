@@ -181,6 +181,26 @@ class Agent:
         except Exception:
             return False
 
+    def _is_write_tool_name(self, name: str) -> bool:
+        """Return True if the tool name likely performs a write/side-effect."""
+        try:
+            n = (name or "").lower()
+            if ("add" in n) or ("update" in n) or ("delete" in n) or ("monitor" in n) or n.startswith("set_") or ("create" in n) or ("remove" in n) or (n in ("update_household_preferences",)):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _contains_write_success(self, flat_results: List[tuple]) -> bool:
+        """Detect if any write-style tool succeeded in the last batch."""
+        try:
+            for _tc_id, name, result, _attempts, _cache_hit in flat_results:
+                if self._is_write_tool_name(str(name)) and isinstance(result, dict) and result.get("ok") is True and ("error" not in result):
+                    return True
+        except Exception:
+            return False
+        return False
+
     async def _run_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, role: str, max_iters: int | None = None, stream_final_to_callback: Optional[Callable[[str], Any]] = None) -> Any:
         # Load runtime config for loop controls
         rc = load_runtime_config(self.project_root)
@@ -240,6 +260,8 @@ class Agent:
         last_response: Any = None
         force_finalize_next = False
         next_tool_choice_override: Optional[str] = None
+        write_phase_allowed = False
+        require_validation_read = False
         for iter_idx in range(iters):
             self.log.info(f"agent iteration {iter_idx+1}/{iters}")
             
@@ -260,6 +282,30 @@ class Agent:
                     pass
                 await self._emit_progress("agent.finish", {"reason": "final_answer"})
                 return last_response
+            # Phase selection: read-only first, then writes; allow explicit validation reads after writes
+            if require_validation_read:
+                ro_calls = [tc for tc in tool_calls if not self._is_write_tool_name(getattr(getattr(tc, 'function', None), 'name', ''))]
+                if ro_calls:
+                    tool_calls = ro_calls
+                await self._emit_progress("phase.validation", {"iteration": f"{iter_idx+1}/{iters}"})
+                messages.append({
+                    "role": "system",
+                    "content": "Validation step: perform read-only checks to confirm earlier writes. Do not perform write operations now."
+                })
+            elif not write_phase_allowed:
+                ro_calls = [tc for tc in tool_calls if not self._is_write_tool_name(getattr(getattr(tc, 'function', None), 'name', ''))]
+                if ro_calls:
+                    tool_calls = ro_calls
+                    write_phase_allowed = True
+                    await self._emit_progress("phase.read_only", {"iteration": f"{iter_idx+1}/{iters}"})
+                    messages.append({
+                        "role": "system",
+                        "content": "Phase 1 (read-only): gather information and identify exact targets. Do not perform write operations yet."
+                    })
+                else:
+                    write_phase_allowed = True
+                    await self._emit_progress("phase.write_enabled", {"iteration": f"{iter_idx+1}/{iters}"})
+
             # Append assistant message that contains tool calls
             messages.append({
                 "role": "assistant",
@@ -334,45 +380,63 @@ class Agent:
                     "name": name,
                     "content": json.dumps(payload, separators=(",", ":")),
                 })
-            try:
-                if self._results_indicate_finalizable(flattened_results):
-                    messages.append({
-                        "role": "system",
-                        "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."
-                    })
-                    if stream_final_to_callback is not None:
-                        try:
-                            from config.loader import resolve_llm_selection
-                            _, sel = resolve_llm_selection(self.project_root, role)
-                            params = dict(sel.get("params", {}))
-                            params["temperature"] = 1
-                            async for chunk in self.llm.astream_chat(
-                                model=model,
-                                messages=messages,
-                                tools=self.openai_tools,
-                                reasoning=sel.get("reasoningEffort"),
-                                tool_choice="none",
-                                **params,
-                            ):
+            # Post-write validation planning and finalize gating
+            write_success = self._contains_write_success(flattened_results)
+            if write_success and not require_validation_read:
+                require_validation_read = True
+                await self._emit_progress("phase.validation_planned", {"iteration": f"{iter_idx+1}/{iters}"})
+            if require_validation_read and not write_success:
+                # We were in validation mode this turn; validation done, proceed to finalize next
+                require_validation_read = False
+                messages.append({
+                    "role": "system",
+                    "content": "Validation complete. Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."
+                })
+                force_finalize_next = True
+            else:
+                try:
+                    allowed_to_finalize = self._results_indicate_finalizable(flattened_results)
+                    # Do not finalize immediately if a write just happened; require a validation read first
+                    if write_success:
+                        allowed_to_finalize = False
+                    if allowed_to_finalize:
+                        messages.append({
+                            "role": "system",
+                            "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."
+                        })
+                        if stream_final_to_callback is not None:
+                            try:
+                                from config.loader import resolve_llm_selection
+                                _, sel = resolve_llm_selection(self.project_root, role)
+                                params = dict(sel.get("params", {}))
+                                params["temperature"] = 1
+                                async for chunk in self.llm.astream_chat(
+                                    model=model,
+                                    messages=messages,
+                                    tools=self.openai_tools,
+                                    reasoning=sel.get("reasoningEffort"),
+                                    tool_choice="none",
+                                    **params,
+                                ):
+                                    try:
+                                        await stream_final_to_callback(chunk)
+                                    except Exception:
+                                        pass
                                 try:
-                                    await stream_final_to_callback(chunk)
+                                    if getattr(self, "progress", None) is not None:
+                                        self.progress.stop_heartbeat("agent")
                                 except Exception:
                                     pass
-                            try:
-                                if getattr(self, "progress", None) is not None:
-                                    self.progress.stop_heartbeat("agent")
+                                await self._emit_progress("agent.finish", {"reason": "final_answer"})
+                                return await self._achat_once(messages, model, role, tool_choice_override="none")
                             except Exception:
-                                pass
-                            await self._emit_progress("agent.finish", {"reason": "final_answer"})
-                            return await self._achat_once(messages, model, role, tool_choice_override="none")
-                        except Exception:
+                                force_finalize_next = True
+                        else:
                             force_finalize_next = True
                     else:
-                        force_finalize_next = True
-                else:
+                        force_finalize_next = False
+                except Exception:
                     force_finalize_next = False
-            except Exception:
-                force_finalize_next = False
             if force_finalize_next:
                 next_tool_choice_override = "none"
         # If we exhausted iterations and still have tool calls requested, synthesize a graceful reply
