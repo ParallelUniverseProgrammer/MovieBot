@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import logging
 import random
+import time
 
 import discord
 from discord import app_commands
@@ -281,6 +282,9 @@ class MovieBotClient(discord.Client):
         # Progress callback function for the agent -> enqueue events
         def progress_callback(progress_type: str, details: str):
             try:
+                # Drop noisy heartbeat updates from the UI queue
+                if progress_type == "heartbeat":
+                    return
                 # Normalize event types from agent
                 mapped_type = progress_type
                 if progress_type == "tool":
@@ -386,8 +390,14 @@ class MovieBotClient(discord.Client):
                 used_quick_path = False
 
                 async def progress_updater():
-                    """Update the progress message only when real events occur."""
+                    """Update the progress message only when real events occur, but not too often."""
                     nonlocal progress_message, last_rendered, iteration_counter
+                    # Load throttling knobs
+                    rc_local = load_runtime_config(self.project_root)  # type: ignore[attr-defined]
+                    min_update_ms = int(rc_local.get("ux", {}).get("progressUpdateIntervalMs", 5000))
+                    freq = int(rc_local.get("ux", {}).get("progressUpdateFrequency", 3))
+                    last_edit_ms = 0.0
+                    event_counter = 0
                     try:
                         # Wait until either done or threshold elapses
                         await asyncio.wait_for(done.wait(), timeout=progress_ms / 1000)
@@ -417,13 +427,28 @@ class MovieBotClient(discord.Client):
                                 # No new events for a while; do not update arbitrarily
                                 continue
 
-                            iteration_counter += 1
-                            tool_name = evt.get("details")
+                            # Determine if we should update based on type, frequency, and time interval
                             ptype = evt.get("type")
+                            if ptype in {"heartbeat"}:
+                                continue
+
+                            event_counter += 1
+                            now_ms = time.monotonic() * 1000.0
+                            should_update = False
+                            if (now_ms - last_edit_ms) >= max(500, min_update_ms):
+                                should_update = True
+                            elif freq > 1 and (event_counter % freq == 0):
+                                should_update = True
+                            if not should_update:
+                                continue
+
+                            tool_name = evt.get("details")
+                            iteration_counter += 1
                             new_message = _get_clever_progress_message(iteration_counter, tool_name, ptype)  # type: ignore[attr-defined]
                             if progress_message and new_message != last_rendered:
                                 await progress_message.edit(content=new_message)
                                 last_rendered = new_message
+                                last_edit_ms = now_ms
                     except Exception as e:
                         log.warning(f"Failed to send or update progress message: {e}")
 

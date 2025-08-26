@@ -74,11 +74,11 @@ tools:
     openAfterFailures: 3
     openForMs: 3000
 ux:
-  progressThresholdMs: 450
-  progressUpdateIntervalMs: 700
-  progressUpdateFrequency: 2
-  heartbeatIntervalMs: 1200
-  typingPulseMs: 7500
+  progressThresholdMs: 3000
+  progressUpdateIntervalMs: 5000
+  progressUpdateFrequency: 4
+  heartbeatIntervalMs: 2500
+  typingPulseMs: 9000
 http:
   connectTimeoutMs: 300
   readTimeoutMs: 900
