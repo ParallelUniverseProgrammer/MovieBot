@@ -126,6 +126,44 @@ class OpenRouterClient:
         
         return await self.async_client.chat.completions.create(**params)  # type: ignore[no-any-return]
 
+    async def astream_chat(self, *, model: str, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, reasoning: Optional[str] = None, tool_choice: Optional[str] = None, **kwargs: Any):
+        """Async generator that yields content deltas for streaming responses.
+
+        Intended for finalization-only turns (no tool calls). Yields plain text chunks.
+        """
+        params: Dict[str, Any] = {"model": model, "messages": messages}
+        if tools is not None:
+            params["tools"] = tools
+        if reasoning is not None:
+            params["reasoning"] = {"effort": reasoning}
+        if tool_choice is not None:
+            params["tool_choice"] = tool_choice
+        kwargs = self._normalize_params(kwargs)
+        provided_headers = kwargs.pop("extra_headers", None)
+        extra_headers = dict(self._default_headers)
+        if isinstance(provided_headers, dict):
+            extra_headers.update(provided_headers)
+        params["extra_headers"] = extra_headers
+        params.update(kwargs)
+
+        stream = await self.async_client.chat.completions.create(stream=True, **params)
+        async for event in stream:  # type: ignore[attr-defined]
+            try:
+                # New SDK returns delta under choices[0].delta.content
+                delta = getattr(event.choices[0], "delta", None)
+                if delta is not None:
+                    part = getattr(delta, "content", None)
+                    if part:
+                        yield part
+                else:
+                    # Older event shape fallbacks
+                    part = getattr(event.choices[0], "message", None)
+                    if part and getattr(part, "content", None):
+                        yield part.content
+            except Exception:
+                # Ignore malformed events; continue streaming
+                continue
+
 
 class LLMClient:
     def __init__(self, api_key: str, provider: str = "openai"):
@@ -262,5 +300,41 @@ class LLMClient:
                 params["tool_choice"] = tool_choice
             params.update(self._normalize_params_openai(model, kwargs))
             return await self.async_client.chat.completions.create(**params)  # type: ignore[no-any-return]
+
+    async def astream_chat(self, *, model: str, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, reasoning: Optional[str] = None, tool_choice: Optional[str] = None, **kwargs: Any):
+        """Async generator that yields content deltas for streaming responses.
+
+        This works for both OpenAI and OpenRouter-backed clients. Yields plain text chunks.
+        """
+        if self.provider == "openrouter":
+            # Delegate to OpenRouter client's streaming method
+            async for chunk in self.client.astream_chat(model=model, messages=messages, tools=tools, reasoning=reasoning, tool_choice=tool_choice, **self._normalize_params(kwargs)):
+                yield chunk
+            return
+
+        # OpenAI async client
+        params: Dict[str, Any] = {"model": model, "messages": messages}
+        if tools is not None:
+            params["tools"] = tools
+        if reasoning is not None:
+            params["reasoning_effort"] = str(reasoning)
+        if tool_choice is not None:
+            params["tool_choice"] = tool_choice
+        params.update(self._normalize_params_openai(model, kwargs))
+
+        stream = await self.async_client.chat.completions.create(stream=True, **params)
+        async for event in stream:  # type: ignore[attr-defined]
+            try:
+                delta = getattr(event.choices[0], "delta", None)
+                if delta is not None:
+                    part = getattr(delta, "content", None)
+                    if part:
+                        yield part
+                else:
+                    part = getattr(event.choices[0], "message", None)
+                    if part and getattr(part, "content", None):
+                        yield part.content
+            except Exception:
+                continue
 
 

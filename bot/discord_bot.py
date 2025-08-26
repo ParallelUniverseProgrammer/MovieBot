@@ -437,7 +437,30 @@ class MovieBotClient(discord.Client):
                         # Only start progress updates if we are not using quick path
                         progress_update_task = asyncio.create_task(progress_updater())
                         try:
-                            response = await agent.aconverse(history)
+                            # Prepare a live message to stream final tokens
+                            stream_msg: discord.Message | None = None
+                            streamed_text_parts: list[str] = []
+
+                            async def _on_stream(chunk: str) -> None:
+                                nonlocal stream_msg, streamed_text_parts
+                                if not chunk:
+                                    return
+                                streamed_text_parts.append(chunk)
+                                text_now = "".join(streamed_text_parts)
+                                # Initialize stream message on first chunk
+                                if stream_msg is None:
+                                    try:
+                                        stream_msg = await message.channel.send(text_now[:1900], silent=True)
+                                    except Exception:
+                                        return
+                                else:
+                                    # Update the message with the new text
+                                    try:
+                                        await stream_msg.edit(content=text_now[:1900])
+                                    except Exception:
+                                        pass
+
+                            response = await agent.aconverse(history, stream_final_to_callback=_on_stream)
                         except Exception:
                             # As a last resort, try quick-path even if heuristic failed initially
                             fallback_text = await _maybe_quick_path_response(content)

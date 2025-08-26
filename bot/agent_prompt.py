@@ -43,7 +43,7 @@ def build_minimal_system_prompt() -> str:
         "\n- Keep outputs crisp: top 3 items max unless user asks for more."
         "\n- Never invent data. If unknown, say 'unknown/not found' and briefly state what you tried."
         "\n- Be courteous in errors: a single brief apology if something fails once, then provide the best available alternative."
-        "\nFINALIZATION: After tool outputs are appended, produce a concise, friendly user-facing reply without additional tool calls and do not echo instructions or headings. Close on a warm note (e.g., 'Enjoy!')."
+        "\nFINALIZATION: After tool outputs are appended, produce a concise, friendly user-facing reply without additional tool calls and do not echo instructions or headings. Do not include any sign-off or closing phrase."
         " Progress feedback is handled externally; you only return the final message."
     )
 

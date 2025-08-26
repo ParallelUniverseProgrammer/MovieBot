@@ -160,6 +160,11 @@ tools:
   parallelism: 6
   retryMax: 1
   backoffBaseMs: 100
+llm:
+  # Defaults if not set per-role; kept tight to reduce unnecessary loops
+  maxIters: 4
+  agentMaxIters: 4
+  workerMaxIters: 3
 ux:
   progressThresholdMs: 3000
   progressUpdateIntervalMs: 5000
@@ -179,10 +184,12 @@ cache:
 1. Discord events are processed and converted to messages
 2. The Agent selects an LLM by role using the config router
 3. The Agent reasons and calls tools (Plex, Radarr, Sonarr, TMDb)
-4. Results are summarized back to the user
+4. Two-phase execution: a read-only probe first, then writes (if needed)
+5. Early finalize heuristic: if results are sufficient (or writes succeed), the Agent forces a finalize-only pass
+6. Final response is streamed to Discord to eliminate long end-of-run pauses
 
 ```
-User → Agent → Tool Calls → Integrations → Answer
+User → Agent → Read Tools → (optional) Write Tools → Streamed Answer
 ```
 
 ## 💬 Examples

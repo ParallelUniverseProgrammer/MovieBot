@@ -136,17 +136,62 @@ class Agent:
         await self._emit_progress("llm.finish", {"model": model, "content_preview": content_preview})
         return resp
 
-    async def _run_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, role: str, max_iters: int | None = None) -> Any:
+    def _results_indicate_finalizable(self, tool_name_and_results: List[tuple]) -> bool:
+        """Heuristic to decide if we likely have enough info to finalize.
+
+        True when a write-style tool succeeded, or when we have any read-style
+        content without errors. Conservative on errors.
+        """
+        try:
+            any_error = False
+            any_write_success = False
+            any_read_content = False
+
+            def _is_write_tool(name: str) -> bool:
+                n = (name or "").lower()
+                if any(x in n for x in ("add", "update", "delete", "monitor", "set_", "create", "remove")):
+                    return True
+                if n in ("update_household_preferences",):
+                    return True
+                return False
+
+            def _has_nonempty_list(d: Dict[str, Any]) -> bool:
+                for key in ("items", "results", "movies", "series", "episodes", "playlists", "collections"):
+                    val = d.get(key)
+                    if isinstance(val, list) and len(val) > 0:
+                        return True
+                return False
+
+            for _tc_id, name, result, _attempts, _cache_hit in tool_name_and_results:
+                if isinstance(result, dict):
+                    if result.get("ok") is False or "error" in result:
+                        any_error = True
+                    if _is_write_tool(str(name)) and result.get("ok") is True and "error" not in result:
+                        any_write_success = True
+                    if _has_nonempty_list(result):
+                        any_read_content = True
+                else:
+                    any_read_content = True
+
+            if any_write_success:
+                return True
+            if any_error:
+                return False
+            return any_read_content
+        except Exception:
+            return False
+
+    async def _run_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, role: str, max_iters: int | None = None, stream_final_to_callback: Optional[Callable[[str], Any]] = None) -> Any:
         # Load runtime config for loop controls
         rc = load_runtime_config(self.project_root)
         # Role-specific iteration limits: prefer agentMaxIters/workerMaxIters, fallback to legacy maxIters
         llm_cfg = rc.get("llm", {}) or {}
         if role in ("smart", "chat"):
-            cfg_max_iters = int(llm_cfg.get("agentMaxIters", llm_cfg.get("maxIters", 8)))
+            cfg_max_iters = int(llm_cfg.get("agentMaxIters", llm_cfg.get("maxIters", 4)))
         elif role == "worker":
-            cfg_max_iters = int(llm_cfg.get("workerMaxIters", llm_cfg.get("maxIters", 8)))
+            cfg_max_iters = int(llm_cfg.get("workerMaxIters", llm_cfg.get("maxIters", 3)))
         else:
-            cfg_max_iters = int(llm_cfg.get("maxIters", 8))
+            cfg_max_iters = int(llm_cfg.get("maxIters", 4))
         iters = max_iters or cfg_max_iters
         # System message + optional dynamic household preferences context (for recommendations)
         parallelism_for_prompt = int(rc.get("tools", {}).get("parallelism", 4))
@@ -193,13 +238,16 @@ class Agent:
         # Deduplicate identical tool calls within a run to reduce latency
         dedup_cache: Dict[str, Any] = {}
         last_response: Any = None
+        force_finalize_next = False
+        next_tool_choice_override: Optional[str] = None
         for iter_idx in range(iters):
             self.log.info(f"agent iteration {iter_idx+1}/{iters}")
             
             # Notify progress callback about LLM thinking
             await self._emit_progress("thinking", {"iteration": f"{iter_idx+1}/{iters}"})
             
-            last_response = await self._achat_once(messages, model, role)
+            last_response = await self._achat_once(messages, model, role, tool_choice_override=next_tool_choice_override)
+            next_tool_choice_override = None
             choice = last_response.choices[0]
             msg = choice.message
             tool_calls = getattr(msg, "tool_calls", None)
@@ -286,9 +334,47 @@ class Agent:
                     "name": name,
                     "content": json.dumps(payload, separators=(",", ":")),
                 })
-            # Let the next loop iteration decide whether to call more tools or finalize.
-            # If the model chooses to finalize, it will return a message with no tool_calls
-            # and we will exit early at the top of the next iteration.
+            try:
+                if self._results_indicate_finalizable(flattened_results):
+                    messages.append({
+                        "role": "system",
+                        "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."
+                    })
+                    if stream_final_to_callback is not None:
+                        try:
+                            from config.loader import resolve_llm_selection
+                            _, sel = resolve_llm_selection(self.project_root, role)
+                            params = dict(sel.get("params", {}))
+                            params["temperature"] = 1
+                            async for chunk in self.llm.astream_chat(
+                                model=model,
+                                messages=messages,
+                                tools=self.openai_tools,
+                                reasoning=sel.get("reasoningEffort"),
+                                tool_choice="none",
+                                **params,
+                            ):
+                                try:
+                                    await stream_final_to_callback(chunk)
+                                except Exception:
+                                    pass
+                            try:
+                                if getattr(self, "progress", None) is not None:
+                                    self.progress.stop_heartbeat("agent")
+                            except Exception:
+                                pass
+                            await self._emit_progress("agent.finish", {"reason": "final_answer"})
+                            return await self._achat_once(messages, model, role, tool_choice_override="none")
+                        except Exception:
+                            force_finalize_next = True
+                    else:
+                        force_finalize_next = True
+                else:
+                    force_finalize_next = False
+            except Exception:
+                force_finalize_next = False
+            if force_finalize_next:
+                next_tool_choice_override = "none"
         # If we exhausted iterations and still have tool calls requested, synthesize a graceful reply
         synthesized = {
             "choices": [
@@ -453,18 +539,18 @@ class Agent:
         
         return batch_results
 
-    async def _arun_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, role: str, max_iters: int | None = None) -> Any:
+    async def _arun_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, role: str, max_iters: int | None = None, stream_final_to_callback: Optional[Callable[[str], Any]] = None) -> Any:
         """Async version of _run_tools_loop for non-blocking operations."""
         # Load runtime config for loop controls
         rc = load_runtime_config(self.project_root)
         # Role-specific iteration limits: prefer agentMaxIters/workerMaxIters, fallback to legacy maxIters
         llm_cfg = rc.get("llm", {}) or {}
         if role in ("smart", "chat"):
-            cfg_max_iters = int(llm_cfg.get("agentMaxIters", llm_cfg.get("maxIters", 8)))
+            cfg_max_iters = int(llm_cfg.get("agentMaxIters", llm_cfg.get("maxIters", 4)))
         elif role == "worker":
-            cfg_max_iters = int(llm_cfg.get("workerMaxIters", llm_cfg.get("maxIters", 8)))
+            cfg_max_iters = int(llm_cfg.get("workerMaxIters", llm_cfg.get("maxIters", 3)))
         else:
-            cfg_max_iters = int(llm_cfg.get("maxIters", 8))
+            cfg_max_iters = int(llm_cfg.get("maxIters", 4))
         iters = max_iters or cfg_max_iters
         # System message + optional dynamic household preferences context (for recommendations)
         parallelism_for_prompt = int(rc.get("tools", {}).get("parallelism", 4))
@@ -511,13 +597,22 @@ class Agent:
         # Deduplicate identical tool calls within a run to reduce latency
         dedup_cache: Dict[str, Any] = {}
         last_response: Any = None
+        force_finalize_next = False
+        next_tool_choice_override: Optional[str] = None
+        write_phase_allowed = False
+        total_tool_calls = 0
+        llm_calls_count = 0
+        import time as _t
+        t_loop_start = _t.monotonic()
         for iter_idx in range(iters):
             self.log.info(f"agent iteration {iter_idx+1}/{iters}")
             
             # Notify progress callback about LLM thinking
             await self._emit_progress("thinking", {"iteration": f"{iter_idx+1}/{iters}"})
             
-            last_response = await self._achat_once(messages, model, role)
+            last_response = await self._achat_once(messages, model, role, tool_choice_override=next_tool_choice_override)
+            llm_calls_count += 1
+            next_tool_choice_override = None
             choice = last_response.choices[0]
             msg = choice.message
             tool_calls = getattr(msg, 'tool_calls', None)
@@ -530,7 +625,28 @@ class Agent:
                     pass
                 await self._emit_progress("agent.finish", {"reason": "final_answer"})
                 return last_response
-            # Append assistant message that contains tool calls
+            # Two-phase policy: first pass read-only, second pass allow writes
+            def _is_write_tool_name(n: str) -> bool:
+                n = (n or "").lower()
+                return (
+                    ("add" in n) or ("update" in n) or ("delete" in n) or ("monitor" in n) or n.startswith("set_") or ("create" in n) or ("remove" in n) or n in ("update_household_preferences",)
+                )
+
+            if not write_phase_allowed:
+                ro_calls = [tc for tc in tool_calls if not _is_write_tool_name(getattr(getattr(tc, 'function', None), 'name', ''))]
+                if ro_calls:
+                    tool_calls = ro_calls
+                    messages.append({
+                        "role": "system",
+                        "content": "Phase 1 (read-only): gather information and identify exact targets. Do not perform write operations yet."
+                    })
+                    # Writes will be allowed next iteration
+                    write_phase_allowed = True
+                else:
+                    # No read-only available; allow writes immediately to avoid stalling
+                    write_phase_allowed = True
+
+            # Append assistant message that contains ONLY the tool calls we will actually execute
             messages.append({
                 "role": "assistant",
                 "content": msg.content or "",
@@ -543,6 +659,7 @@ class Agent:
                     for tc in tool_calls
                 ],
             })
+
             # Execute tool calls concurrently with bounded parallelism and batching
             rc = load_runtime_config(self.project_root)
             timeout_ms = int(rc.get("tools", {}).get("timeoutMs", 8000))
@@ -578,6 +695,7 @@ class Agent:
                     flattened_results.extend(result)
                 else:
                     flattened_results.append(result)
+            total_tool_calls += len(flattened_results)
             
             # Determine max items to keep in summaries and cache TTL
             list_max_items = int(rc.get("tools", {}).get("listMaxItems", 5))
@@ -601,8 +719,51 @@ class Agent:
                     "name": name,
                     "content": json.dumps(payload, separators=(",", ":")),
                 })
-            # Allow subsequent iterations to request additional tools after seeing results.
-            # The loop will exit when the model returns a message with no tool_calls.
+            # Consider early finalize after tool results; if forced, do a finalize-only turn immediately
+            try:
+                if self._results_indicate_finalizable(flattened_results):
+                    messages.append({
+                        "role": "system",
+                        "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."
+                    })
+                    if stream_final_to_callback is not None:
+                        try:
+                            from config.loader import resolve_llm_selection
+                            _, sel = resolve_llm_selection(self.project_root, role)
+                            params = dict(sel.get("params", {}))
+                            params["temperature"] = 1
+                            async for chunk in self.llm.astream_chat(
+                                model=model,
+                                messages=messages,
+                                tools=self.openai_tools,
+                                reasoning=sel.get("reasoningEffort"),
+                                tool_choice="none",
+                                **params,
+                            ):
+                                try:
+                                    await stream_final_to_callback(chunk)
+                                except Exception:
+                                    pass
+                            try:
+                                if getattr(self, "progress", None) is not None:
+                                    self.progress.stop_heartbeat("agent")
+                            except Exception:
+                                pass
+                            await self._emit_progress("agent.finish", {"reason": "final_answer"})
+                            return await self._achat_once(messages, model, role, tool_choice_override="none")
+                        except Exception:
+                            force_finalize_next = True
+                    else:
+                        force_finalize_next = True
+            except Exception:
+                pass
+
+        # Metrics
+        try:
+            elapsed_ms = int((_t.monotonic() - t_loop_start) * 1000)
+            await self._emit_progress("agent.metrics", {"iters": iters, "llm_calls": llm_calls_count, "tool_calls": total_tool_calls, "elapsed_ms": elapsed_ms})
+        except Exception:
+            pass
         # If we exhausted iterations and still have tool calls requested, synthesize a graceful reply
         synthesized = {
             "choices": [
@@ -673,13 +834,13 @@ class Agent:
             finally:
                 loop.close()
 
-    async def aconverse(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
+    async def aconverse(self, messages: List[Dict[str, str]], stream_final_to_callback: Optional[Callable[[str], Any]] = None) -> Dict[str, Any]:
         """Async version of converse for non-blocking operations."""
         # Choose model from config
         from config.loader import resolve_llm_selection
         _, sel = resolve_llm_selection(self.project_root, "smart")
         model = sel.get("model", "gpt-5")
-        return await self._arun_tools_loop(messages, model=model, role="smart")
+        return await self._arun_tools_loop(messages, model=model, role="smart", max_iters=None)
 
     def recommend(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         # Choose model from config
