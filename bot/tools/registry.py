@@ -7,6 +7,15 @@ import asyncio
 
 from .tool_impl import (
     make_search_plex,
+    # Enhanced Sonarr Tools
+    make_sonarr_episode_fallback_search,
+    make_sonarr_quality_fallback,
+    make_read_household_preferences,
+    make_search_household_preferences,
+    make_update_household_preferences,
+    make_query_household_preferences,
+)
+from .tool_impl_plex import (
     make_get_plex_movies_4k_or_hdr,
     make_set_plex_rating,
     make_get_plex_library_sections,
@@ -21,6 +30,8 @@ from .tool_impl import (
     make_get_plex_playback_status,
     make_get_plex_watch_history,
     make_get_plex_item_details,
+)
+from .tool_impl_tmdb import (
     make_tmdb_search,
     make_tmdb_recommendations,
     make_tmdb_discover_movies,
@@ -45,6 +56,8 @@ from .tool_impl import (
     make_tmdb_collection_details,
     make_tmdb_watch_providers_movie,
     make_tmdb_watch_providers_tv,
+)
+from .tool_impl_radarr import (
     make_radarr_lookup,
     make_radarr_add_movie,
     make_radarr_get_movies,
@@ -65,6 +78,8 @@ from .tool_impl import (
     make_radarr_root_folders,
     make_radarr_get_indexers,
     make_radarr_get_download_clients,
+)
+from .tool_impl_sonarr import (
     make_sonarr_lookup,
     make_sonarr_add_series,
     make_sonarr_get_series,
@@ -82,7 +97,6 @@ from .tool_impl import (
     make_sonarr_disk_space,
     make_sonarr_quality_profiles,
     make_sonarr_root_folders,
-    # Enhanced Sonarr Tools
     make_sonarr_monitor_season,
     make_sonarr_monitor_episodes_by_season,
     make_sonarr_search_season,
@@ -92,12 +106,6 @@ from .tool_impl import (
     make_sonarr_get_season_summary,
     make_sonarr_get_season_details,
     make_sonarr_get_episode_file_info,
-    make_sonarr_episode_fallback_search,
-    make_sonarr_quality_fallback,
-    make_read_household_preferences,
-    make_search_household_preferences,
-    make_update_household_preferences,
-    make_query_household_preferences,
 )
 from .result_cache import make_fetch_cached_result
 
