@@ -13,6 +13,7 @@ except Exception:  # pragma: no cover
 
 from config.loader import load_settings, load_runtime_config
 from integrations.plex_client import PlexClient, ResponseLevel
+from bot.workers.plex_search import PlexSearchWorker
 from integrations.tmdb_client import TMDbClient, TMDbResponseLevel
 from integrations.radarr_client import RadarrClient
 from integrations.sonarr_client import SonarrClient
@@ -22,51 +23,13 @@ import httpx
 
 def make_search_plex(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
     async def impl(args: dict) -> dict:
-        query = str(args.get("query", "")).strip()
-        
-        # Advanced filtering options
-        filters = args.get("filters", {})
-        year_min = filters.get("year_min")
-        year_max = filters.get("year_max")
-        genres = filters.get("genres", [])
-        actors = filters.get("actors", [])
-        directors = filters.get("directors", [])
-        content_rating = filters.get("content_rating")
-        rating_min = filters.get("rating_min")
-        rating_max = filters.get("rating_max")
-        sort_by = filters.get("sort_by", "title")
-        sort_order = filters.get("sort_order", "asc")
-        limit = args.get("limit", 20)
-        response_level = ResponseLevel(args.get("response_level", "compact")) if args.get("response_level") else None
-        
-        settings = load_settings(project_root)
-        plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
-        
-        # Always perform server-side filtered search via section.search where possible
-        results = await asyncio.to_thread(
-            plex.search_movies_filtered,
-            query or None,
-            year_min=year_min,
-            year_max=year_max,
-            genres=genres,
-            actors=actors,
-            directors=directors,
-            content_rating=content_rating,
-            rating_min=rating_min,
-            rating_max=rating_max,
-            sort_by=sort_by,
-            sort_order=sort_order,
-            limit=limit,
-            response_level=response_level,
+        worker = PlexSearchWorker(project_root)
+        return await worker.search(
+            query=args.get("query"),
+            limit=args.get("limit", 20),
+            response_level=args.get("response_level"),
+            filters=args.get("filters"),
         )
-        
-        return {
-            "items": results,
-            "total_found": len(results),
-            "filters_applied": filters,
-            "query": query,
-            "response_level": response_level.value if response_level else "compact"
-        }
 
     return impl
 
