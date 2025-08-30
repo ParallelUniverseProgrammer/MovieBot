@@ -6,13 +6,19 @@ An elegant, provider‑agnostic AI assistant for your household media. MovieBot 
 
 - Conversational agent with tool calling (90+ tools)
 - Provider‑agnostic LLM routing, configured in `config/config.yaml`
-- Role‑based model selection: `chat`, `smart`, and `worker`
+- Role‑based model selection: `chat`, `smart`, `worker`, `quick`, and `summarizer`
 - Optional reasoning effort per role (minimal / medium / high)
+- AI‑powered household preferences system that learns your taste
+- Advanced performance features: caching, circuit breakers, and parallel execution
+- Sub‑agent architecture for complex task handling
+- Clever progress messages and real‑time UX updates
 - Fast setup wizard and a modern, DM‑friendly Discord UX
 
 Why people like it:
 - Minimal config, sensible defaults, and a "no surprises" setup (your `.env` is never overwritten)
 - Clear separation of concerns (config routing picks the model; agents do the work)
+- Sophisticated performance optimizations that make it fast and reliable
+- AI that actually learns and adapts to your household's preferences
 - Friendly codebase for contributors (typed, testable, and easy to navigate)
 
 ## 🚀 Quick Start
@@ -239,30 +245,137 @@ Troubleshooting:
 - Model provider errors: verify the selected provider has a valid API key and that `llm.providers.priority` matches your keys.
 - Radarr/Sonarr connectivity: confirm base URLs and API keys; ensure services are reachable from your machine.
 
-### Other runtime tuning
+### Advanced Configuration Options
+
+MovieBot offers extensive configuration for fine-tuning performance and behavior:
+
+#### **Tool Execution Tuning**
 ```yaml
 tools:
-  timeoutMs: 6000
-  parallelism: 6
-  retryMax: 1
-  backoffBaseMs: 100
+  # Global tool settings
+  timeoutMs: 1500
+  parallelism: 12
+  retryMax: 2
+  backoffBaseMs: 50
+  listMaxItems: 12
+  
+  # Per-family parallelism (override global)
+  familyParallelism:
+    tmdb: 16      # TMDb can handle more concurrent requests
+    plex: 4       # Plex is more conservative
+    radarr: 6
+    sonarr: 6
+  
+  # Per-family timeouts
+  perFamily:
+    tmdb:
+      timeoutMs: 2500
+    plex:
+      timeoutMs: 4000
+  
+  # Per-tool overrides
+  perTool:
+    tmdb_search:
+      timeoutMs: 2000
+  
+  # Hedge delays to prevent API flooding
+  hedgeDelayMsByFamily:
+    tmdb: 150
+  
+  # Result list limits per family
+  listMaxItemsByFamily:
+    tmdb: 6
+    plex: 4
+  
+  # Context management
+  maxToolMessagesInContext: 12
+  
+  # Circuit breaker settings
+  circuit:
+    openAfterFailures: 3
+    openForMs: 3000
+```
+
+#### **LLM Role Configuration**
+```yaml
 llm:
-  # Defaults if not set per-role; kept tight to reduce unnecessary loops
+  # Global iteration limits
   maxIters: 4
-  agentMaxIters: 4
-  workerMaxIters: 3
+  agentMaxIters: 6
+  workerMaxIters: 2
+  
+  providers:
+    priority: [openai, openrouter]
+    openai:
+      # Role-specific models and settings
+      chat:
+        model: gpt-5-mini
+        reasoningEffort: minimal
+        params:
+          temperature: 1
+          tool_choice: auto
+      smart:
+        model: gpt-5
+        reasoningEffort: medium
+      worker:
+        model: gpt-5-mini
+        reasoningEffort: medium
+      quick:
+        model: gpt-4.1-nano
+        params:
+          max_tokens: 180
+      summarizer:
+        model: gpt-4.1-mini
+        params:
+          max_response_tokens: 250
+```
+
+#### **UX and Progress Configuration**
+```yaml
 ux:
+  # Progress display thresholds
   progressThresholdMs: 3000
   progressUpdateIntervalMs: 5000
-  progressUpdateFrequency: 2
+  progressUpdateFrequency: 4
+  
+  # Heartbeat and typing
+  heartbeatIntervalMs: 2500
+  typingPulseMs: 9000
+```
+
+#### **HTTP and Connection Management**
+```yaml
 http:
-  connectTimeoutMs: 2000
-  readTimeoutMs: 8000
-  totalTimeoutMs: 12000
-  maxConnections: 100
+  # Granular timeout control
+  connectTimeoutMs: 300
+  readTimeoutMs: 900
+  totalTimeoutMs: 2200
+  
+  # Connection pooling
+  maxConnections: 384
+  
+  # Retry configuration
+  retryMax: 1
+  backoffBaseMs: 40
+```
+
+#### **Caching Configuration**
+```yaml
 cache:
-  ttlShortSec: 60
-  ttlMediumSec: 300
+  # TTL settings for different cache levels
+  ttlShortSec: 60    # Short-term cache (1 minute)
+  ttlMediumSec: 240  # Medium-term cache (4 minutes)
+```
+
+#### **Discord Integration (Optional)**
+```yaml
+discord:
+  enabled: false
+  botToken: ""
+  channelId: ""
+  webhookUrl: ""
+  sendToolEvents: true
+  sendThinking: true
 ```
 
 ## 🎭 How It Works
@@ -278,21 +391,182 @@ cache:
 User → Agent → Read Tools → (optional) Write Tools → Streamed Answer
 ```
 
+## 🧠 Smart Household Preferences
+
+MovieBot features a sophisticated AI-powered taste profiling system that learns and adapts to your household's preferences:
+
+### **Intelligent Taste Learning**
+- **Genre Preferences**: Learns your favorite genres, aesthetics, and themes
+- **People & Faces**: Remembers actors, directors, and creators you love
+- **Content Constraints**: Tracks runtime preferences, language requirements, and content warnings
+- **Anti-Preferences**: Learns what to avoid (found footage, shaky-cam, etc.)
+
+### **AI-Powered Recommendations**
+- **Smart Pairing**: Combines popular choices with hidden gems based on your taste
+- **Contextual Queries**: Ask "What should we watch tonight?" and get personalized suggestions
+- **Preference Queries**: Use natural language to query your taste profile
+- **Dynamic Updates**: Preferences evolve as you rate and interact with content
+
+### **Advanced Preference Management**
+```bash
+# Query your taste profile with natural language
+@MovieBot "What genres do we like for horror movies?"
+
+# Update preferences through conversation
+@MovieBot "Add Pedro Pascal to our favorite actors"
+
+# Get personalized recommendations
+@MovieBot "Recommend something similar to The Matrix but more recent"
+```
+
+### **Preference Structure**
+```json
+{
+  "likes": {
+    "genres": ["thriller", "sci-fi", "black comedy"],
+    "people": ["Pedro Pascal", "Margot Robbie"],
+    "aesthetics": ["slick", "stylized", "polished"],
+    "motifs": ["claustrophobic", "power reversals", "timeline shifts"]
+  },
+  "constraints": {
+    "eraMinYear": 2019,
+    "runtimeSweetSpotMins": [100, 130],
+    "contentWarnings": ["sexual assault", "cancer", "harm to animals"]
+  },
+  "heuristics": {
+    "pairing": "1 bigger angle with 1 hidden gem; emphasize hidden",
+    "maxOptions": 3,
+    "zeroSpoilers": true
+  }
+}
+```
+
+## ⚡ Performance & Reliability
+
+MovieBot is built for speed and reliability with enterprise-grade performance features:
+
+### **Intelligent Caching System**
+- **Multi-Level TTL Caching**: Short-term (60s) and medium-term (240s) caches
+- **Tool Result Caching**: Caches API responses with reference IDs for reuse
+- **In-Flight Coalescing**: Merges concurrent identical requests to prevent duplicate API calls
+- **Smart Deduplication**: Automatically prevents redundant tool executions
+
+### **Circuit Breaker Protection**
+- **Automatic Failure Handling**: Opens circuit after 3 failures, recovers after 3 seconds
+- **Graceful Degradation**: Continues operating even when some services are down
+- **Retry Logic**: Configurable retry with exponential backoff
+- **Service Isolation**: Failures in one service don't affect others
+
+### **Advanced Parallel Execution**
+- **Bounded Concurrency**: Up to 12 parallel tool executions (configurable per family)
+- **Family-Specific Limits**: TMDb (16), Plex (4), Radarr (6), Sonarr (6) concurrent requests
+- **Hedge Delays**: Configurable delays to prevent API rate limiting
+- **Tool Batching**: Groups similar operations for maximum efficiency
+
+### **Connection Management**
+- **HTTP Connection Pooling**: Up to 384 concurrent connections
+- **Shared HTTP Client**: Efficient connection reuse across all services
+- **Granular Timeouts**: Different timeouts for connect (300ms), read (900ms), total (2.2s)
+- **Automatic Retry**: Configurable retry with exponential backoff
+
+## 🎯 Sub-Agent Architecture
+
+MovieBot uses a sophisticated sub-agent system for handling complex, specialized tasks:
+
+### **Episode Fallback Search**
+When season packs fail, specialized sub-agents handle episode-level searches:
+- **Intelligent Fallback**: Automatically switches to individual episode searches
+- **Context Preservation**: Maintains series context while searching episodes
+- **Comprehensive Coverage**: Ensures all target episodes are searched
+- **Status Reporting**: Provides detailed summaries of search results
+
+### **Quality Fallback Handling**
+Smart quality management when preferred qualities aren't available:
+- **Graceful Degradation**: Falls back to available qualities automatically
+- **Quality Hierarchy**: Respects your quality preferences in order
+- **Sub-Agent Coordination**: Uses specialized agents for quality decisions
+- **User Notification**: Keeps you informed of quality changes
+
+### **Focused Task Execution**
+- **Context Efficiency**: Sub-agents use minimal context for fast execution
+- **Specialized Prompts**: Tailored system prompts for specific task types
+- **Worker Role Models**: Uses lightweight models for sub-agent tasks
+- **Result Aggregation**: Combines sub-agent results into coherent responses
+
+## 💬 Enhanced UX Features
+
+MovieBot provides a delightful user experience with clever progress tracking and real-time updates:
+
+### **Clever Progress Messages**
+Over 30 witty, contextual progress messages that entertain while you wait:
+- **Tool-Specific Messages**: "Interrogating TMDB with leading questions…"
+- **Service-Aware Updates**: "Auditing the download queue…" for Radarr
+- **Stable Randomness**: Same progress type shows consistent messages
+- **Contextual Hints**: Progress messages hint at what's actually happening
+
+### **Real-Time Progress Broadcasting**
+- **Async Progress Updates**: Non-blocking progress notifications
+- **Event-Driven UX**: Throttled, humanized progress events
+- **Heartbeat System**: Keeps users informed during long operations
+- **Typing Indicators**: Discord typing simulation for natural feel
+
+### **Smart Response Optimization**
+- **Quick Path Detection**: Identifies simple queries for fast responses
+- **Streaming Responses**: Real-time response streaming for snappy UX
+- **Progress Thresholds**: Only shows progress for operations >3 seconds
+- **Context-Aware Messaging**: Adapts message style to user intent
+
 ## 💬 Examples
 
-### Slash commands
+### Slash Commands
 ```bash
-/search query:"Inception" external:true
-/watchlist addmovie tmdb_id:27205
-/rate rating_key:12345 rating:9
-/prefs get compact:true
+# Media discovery and management
+/discover search query:"Inception" year:2010
+/media search query:"The Matrix" limit:5
+/media rate rating_key:12345 rating:9
+
+# Household preferences
+/prefs show compact:true
+/prefs update path:"likes.people" value:"Pedro Pascal"
+/prefs search query:"horror genres"
 ```
 
-### Natural language
+### Natural Language Interactions
 ```
+# Personalized recommendations
 @MovieBot "What should we watch tonight?"
+@MovieBot "Recommend something similar to The Matrix but more recent"
+@MovieBot "Find me a thriller with Pedro Pascal"
+
+# Content management
 @MovieBot "Add The Matrix to my watchlist"
-@MovieBot "What's similar to Inception?"
+@MovieBot "Search for Inception in my Plex library"
+@MovieBot "What's in my recently added movies?"
+
+# Preference learning
+@MovieBot "I love claustrophobic thrillers"
+@MovieBot "Add Margot Robbie to my favorite actors"
+@MovieBot "What genres do we like for horror movies?"
+
+# Complex queries
+@MovieBot "Find me a 2020s sci-fi movie with good ratings that I don't have"
+@MovieBot "What's trending in horror this week?"
+@MovieBot "Show me my unwatched movies from 2023"
+```
+
+### Advanced Features in Action
+```
+# Sub-agent episode fallback
+@MovieBot "Search for season 2 of The Mandalorian"
+# → Automatically falls back to individual episodes if season pack fails
+
+# Quality fallback handling  
+@MovieBot "Add Dune in 4K"
+# → Falls back to available quality if 4K isn't found
+
+# Smart caching and parallel execution
+@MovieBot "Find similar movies to Inception, The Matrix, and Interstellar"
+# → Executes multiple TMDb searches in parallel with intelligent caching
 ```
 
 ## 🧱 Project Structure
