@@ -169,12 +169,14 @@ and set your `llm.providers.priority` to prefer `openrouter`.
 
 Minimum viable config for Radarr/Sonarr:
 ```yaml
+household:
+  displayName: Household
 radarr:
   qualityProfileId: 1
-  rootFolderPath: "/movies"
+  rootFolderPath: "D:\\Movies"
 sonarr:
-  qualityProfileId: 1
-  rootFolderPath: "/tv"
+  qualityProfileId: 4
+  rootFolderPath: "D:\\TV"
 ```
 
 ### Provider‑agnostic LLM routing
@@ -186,23 +188,27 @@ Two equivalent ways to specify models per role:
 1) Simple string form (backwards compatible):
 ```yaml
 llm:
-  maxIters: 8
+  agentMaxIters: 6
+  workerMaxIters: 2
   providers:
     priority: [openai, openrouter]
     openai:
       chat: gpt-5-mini
       smart: gpt-5
-      worker: gpt-5-nano
+      worker: gpt-5-mini
+      quick: gpt-4.1-nano
+      summarizer: gpt-4.1-mini
     openrouter:
       chat: z-ai/glm-4.5-air:free
       smart: z-ai/glm-4.5-air:free
       worker: z-ai/glm-4.5-air:free
 ```
 
-2) Advanced object form (optional reasoning and params per role):
+2) Advanced object form (recommended for production):
 ```yaml
 llm:
-  maxIters: 8
+  agentMaxIters: 6
+  workerMaxIters: 2
   providers:
     priority: [openai, openrouter]
     openai:
@@ -214,27 +220,35 @@ llm:
           tool_choice: auto
       smart:
         model: gpt-5
+        reasoningEffort: medium
         params:
           temperature: 1
+          tool_choice: auto
       worker:
-        model: gpt-5-nano
+        model: gpt-5-mini
+        reasoningEffort: medium
         params:
-          temperature: 0.7
+          temperature: 1
+          tool_choice: auto
+      quick:
+        model: gpt-4.1-nano
+        params:
+          max_tokens: 180
+      summarizer:
+        model: gpt-4.1-mini
+        params:
+          max_response_tokens: 250
+          temperature: 1
     openrouter:
-      chat:
-        model: z-ai/glm-4.5-air:free
-        reasoningEffort: minimal
-      smart:
-        model: z-ai/glm-4.5-air:free
-      worker:
-        model: z-ai/glm-4.5-air:free
-        params:
-          temperature: 0.7
+      chat: z-ai/glm-4.5-air:free
+      smart: z-ai/glm-4.5-air:free
+      worker: z-ai/glm-4.5-air:free
 ```
 
 Notes:
 - The router respects `providers.priority` and required API keys.
 - For `chat`, `reasoningEffort` defaults to `minimal` (keeps latency low with `gpt-5-mini`).
+- `agentMaxIters: 6` and `workerMaxIters: 2` provide balanced performance for different task types.
 - Extra `params` are passed directly to the OpenAI‑compatible API (e.g., `temperature`, `top_p`, `max_tokens`, `tool_choice`).
 - With OpenRouter, tracking headers (`HTTP-Referer`, `X-Title`) derive from `OPENROUTER_SITE_URL` and `OPENROUTER_APP_NAME`.
 
@@ -300,7 +314,6 @@ tools:
 ```yaml
 llm:
   # Global iteration limits
-  maxIters: 4
   agentMaxIters: 6
   workerMaxIters: 2
   
@@ -317,9 +330,15 @@ llm:
       smart:
         model: gpt-5
         reasoningEffort: medium
+        params:
+          temperature: 1
+          tool_choice: auto
       worker:
         model: gpt-5-mini
         reasoningEffort: medium
+        params:
+          temperature: 1
+          tool_choice: auto
       quick:
         model: gpt-4.1-nano
         params:
@@ -328,6 +347,11 @@ llm:
         model: gpt-4.1-mini
         params:
           max_response_tokens: 250
+          temperature: 1
+    openrouter:
+      chat: z-ai/glm-4.5-air:free
+      smart: z-ai/glm-4.5-air:free
+      worker: z-ai/glm-4.5-air:free
 ```
 
 #### **UX and Progress Configuration**
