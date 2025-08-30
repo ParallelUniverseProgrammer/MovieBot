@@ -1,17 +1,17 @@
 # MovieBot
 
-An elegant, provider‑agnostic AI assistant for your household media. MovieBot connects Plex, Radarr, Sonarr, and TMDb with a modern Discord experience — powered by OpenAI‑compatible models (OpenAI or OpenRouter). It’s fast to set up, pleasant to use, and designed for contributors.
+An elegant, provider‑agnostic AI assistant for your household media. MovieBot connects Plex, Radarr, Sonarr, and TMDb with a modern Discord experience — powered by OpenAI‑compatible models (OpenAI or OpenRouter). It's fast to set up, pleasant to use, and designed for contributors.
 
 ## ✨ Highlights
 
-- Conversational agent with tool calling (50+ tools)
+- Conversational agent with tool calling (90+ tools)
 - Provider‑agnostic LLM routing, configured in `config/config.yaml`
 - Role‑based model selection: `chat`, `smart`, and `worker`
 - Optional reasoning effort per role (minimal / medium / high)
 - Fast setup wizard and a modern, DM‑friendly Discord UX
 
 Why people like it:
-- Minimal config, sensible defaults, and a “no surprises” setup (your `.env` is never overwritten)
+- Minimal config, sensible defaults, and a "no surprises" setup (your `.env` is never overwritten)
 - Clear separation of concerns (config routing picks the model; agents do the work)
 - Friendly codebase for contributors (typed, testable, and easy to navigate)
 
@@ -37,19 +37,44 @@ pip install -r requirements.txt
 ```
 
 ### 3) Configure via Setup Wizard
+
+**Option A: One-Command Setup (Recommended)**
+```bash
+./setup_env_and_start.sh
+```
+
+**Option B: Manual Setup**
 ```bash
 python main.py
 ```
-Notes:
-- Running `python main.py` launches the wizard only if configuration is incomplete. If everything is already configured, it will simply confirm and exit.
+
+#### Setup Process: The One-Two Punch
+
+MovieBot uses a sophisticated two-stage setup process:
+
+1. **`setup_env_and_start.sh`** - The Bash orchestrator that:
+   - Validates Python environment and virtual environment
+   - Checks dependencies and installs missing packages
+   - Validates environment configuration
+   - Automatically launches the setup wizard if needed
+   - Starts the bot when everything is ready
+
+2. **`setup_wizard.py`** - The Python wizard that:
+   - Provides an interactive curses-based TUI (or simple prompt fallback)
+   - Collects all necessary API keys and configuration
+   - Creates configuration files safely (never overwrites existing `.env`)
+   - Sets up household preferences and defaults
+
+#### Setup Notes:
+- Running `./setup_env_and_start.sh` handles the entire setup-to-launch process automatically
+- The wizard will never overwrite your existing `.env`. If `.env` exists, changes are written to `.env.wizard.suggested` for you to review and merge
+- The wizard pre-fills from your `.env`, and secret inputs are hidden
 - To force-run the wizard at any time (even if config looks complete):
 ```bash
 python -c "from pathlib import Path; from scripts.setup_wizard import run_interactive; run_interactive(Path('.').resolve())"
 ```
-- The wizard will never overwrite your existing `.env`. If `.env` exists, changes are written to `.env.wizard.suggested` for you to review and merge.
-- The wizard pre-fills from your `.env`, and secret inputs are hidden.
 
-You’ll be guided through:
+You'll be guided through:
 - Discord configuration
 - API key setup
 - Radarr/Sonarr default profiles and folders
@@ -70,7 +95,7 @@ MOVIEBOT_LOG_LEVEL=DEBUG python -m bot.discord_bot
 ### Discord setup (intents and invite)
 
 1) In the Discord Developer Portal → Your App → Bot:
-- Enable “Message Content Intent”.
+- Enable "Message Content Intent".
 - Recommended permissions: Send Messages, Read Message History.
 
 2) Invite the bot to your server:
@@ -209,8 +234,8 @@ Notes:
 
 Troubleshooting:
 - Slash commands not appearing: set `DISCORD_GUILD_ID` for your dev server and rerun; otherwise global sync may take up to ~1 hour.
-- Bot “starts and stops”: that’s `Ctrl-C` interrupting. Leave it running to stay online.
-- “Missing intents/permissions”: enable Message Content Intent and ensure the bot has Send Messages + Read Message History in your server.
+- Bot "starts and stops": that's `Ctrl-C` interrupting. Leave it running to stay online.
+- "Missing intents/permissions": enable Message Content Intent and ensure the bot has Send Messages + Read Message History in your server.
 - Model provider errors: verify the selected provider has a valid API key and that `llm.providers.priority` matches your keys.
 - Radarr/Sonarr connectivity: confirm base URLs and API keys; ensure services are reachable from your machine.
 
@@ -267,7 +292,7 @@ User → Agent → Read Tools → (optional) Write Tools → Streamed Answer
 ```
 @MovieBot "What should we watch tonight?"
 @MovieBot "Add The Matrix to my watchlist"
-@MovieBot "What’s similar to Inception?"
+@MovieBot "What's similar to Inception?"
 ```
 
 ## 🧱 Project Structure
@@ -285,11 +310,18 @@ MovieBot/
 │   └── clients.py
 ├── integrations/
 ├── scripts/
+│   └── setup_wizard.py
 ├── data/
 ├── tests/
 ├── main.py
+├── setup_env_and_start.sh
 └── requirements.txt
 ```
+
+**Key Setup Files:**
+- **`setup_env_and_start.sh`** - Main setup orchestrator and launcher
+- **`scripts/setup_wizard.py`** - Interactive configuration wizard
+- **`main.py`** - Alternative setup entry point
 
 ## 🧪 Testing
 
