@@ -1,25 +1,25 @@
 # MovieBot
 
-An elegant, provider‑agnostic AI assistant for your household media. MovieBot connects Plex, Radarr, Sonarr, and TMDb with a modern Discord experience — powered by OpenAI‑compatible models (OpenAI or OpenRouter). It's fast to set up, pleasant to use, and designed for contributors.
+MovieBot is a simple helper for your home media. It lives in Discord and connects to Plex, Radarr, Sonarr, and TMDb. Ask in plain English to find something to watch, search your library, or add new titles to your download queue. It learns what your household likes and gives better suggestions over time. Works with OpenAI or OpenRouter.
 
 ## ✨ Highlights
 
-- Conversational agent with tool calling (90+ tools)
-- Provider‑agnostic LLM routing, configured in `config/config.yaml`
-- Role‑based model selection: `chat`, `smart`, `worker`, `quick`, and `summarizer`
-- Optional reasoning effort per role (minimal / medium / high)
-- AI‑powered household preferences system that learns your taste
-- Advanced performance features: caching, circuit breakers, and parallel execution
-- Sub‑agent architecture for complex task handling
-- Clever progress messages and real‑time UX updates
-- Fast setup wizard and a modern, DM‑friendly Discord UX
+- Use it in Discord — no new app to install
+- Find something to watch fast with natural‑language search
+- Add and manage movies/shows in Radarr and Sonarr
+- Search and summarize what's in your Plex library
+- Learns your taste (genres, people, limits) and personalizes results
+- Quick setup with safe defaults; your `.env` is never overwritten
+- Reliable under load: caching, retries, and parallel requests
+- Provider‑agnostic: OpenAI or OpenRouter (set in `config/config.yaml`)
+- Friendly for tinkerers: clear config, typed code, easy to extend
 
 Why people like it:
-- Minimal config, sensible defaults, and a "no surprises" setup (your `.env` is never overwritten)
-- Clear separation of concerns (config routing picks the model; agents do the work)
-- Sophisticated performance optimizations that make it fast and reliable
-- AI that actually learns and adapts to your household's preferences
-- Friendly codebase for contributors (typed, testable, and easy to navigate)
+- Set it up once and use it from any device via Discord
+- Sensible defaults and a "no surprises" setup (your `.env` is never overwritten)
+- Clear config: you pick the provider; the bot handles the rest
+- Fast and stable even when services are slow
+- Improves with use as it learns your household's preferences
 
 ## 🚀 Quick Start
 
