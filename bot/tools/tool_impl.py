@@ -233,7 +233,16 @@ def build_preferences_context(data: Dict[str, Any]) -> str:
         profile_bits.append(f"non-horror tone: {tone_non}")
     if tone_hor:
         profile_bits.append(f"horror tone: {tone_hor}")
-    for label, val in ("pacing", pacing), ("structure", structure), ("visuals", visuals), ("reality", reality), ("meta", meta), ("ending", ending), ("gore/violence", gore):
+    profile_fields = [
+        ("pacing", pacing),
+        ("structure", structure),
+        ("visuals", visuals),
+        ("reality", reality),
+        ("meta", meta),
+        ("ending", ending),
+        ("gore/violence", gore),
+    ]
+    for label, val in profile_fields:
         if val:
             profile_bits.append(f"{label}: {val}")
     if humor_non:
