@@ -639,13 +639,13 @@ class Agent:
                     # Allow one more iteration to correct; do not force finalize yet
                     messages.append({
                         "role": "system",
-                        "content": "Validation indicates the write may not have taken effect. You may attempt one corrective action or clarify, then finalize."
+                        "content": "It looks like the action might not have completed as expected. You can try one more time or let me know if you need help, then I'll wrap up with what we have."
                     })
                     force_finalize_next = False
                 else:
                     messages.append({
                         "role": "system",
-                        "content": "Validation complete. Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."
+                        "content": "Validation complete. Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Be warm, friendly, and decisive. Use plain, upbeat language. Do not call tools."
                     })
                     force_finalize_next = True
             else:
@@ -663,7 +663,7 @@ class Agent:
                     if allowed_to_finalize:
                         messages.append({
                             "role": "system",
-                            "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."
+                            "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Be warm, friendly, and decisive. Use plain, upbeat language. Do not call tools."
                         })
                         if stream_final_to_callback is not None:
                             try:
@@ -712,7 +712,7 @@ class Agent:
             "choices": [
                 {
                     "message": {
-                        "content": "Proceeding with best-effort result given the iteration limit."
+                        "content": "Here's what I found with the time available. I've done my best to help with your request!"
                     }
                 }
             ]
@@ -1154,8 +1154,8 @@ class Agent:
                 messages.append({
                     "role": "system",
                     "content": (
-                        "Write attempt failed. Perform at most one quick read-only lookup to diagnose (e.g., radarr_lookup), "
-                        "then finalize with a brief explanation and next steps. Do not perform additional write attempts."
+                        "The action didn't work as expected. Let me check what's available and then give you a helpful update with next steps. "
+                        "I won't try the same action again, but I'll help you figure out what to do."
                     )
                 })
             if write_success and not require_validation_read:
@@ -1170,7 +1170,7 @@ class Agent:
                 require_validation_read = False
                 messages.append({
                     "role": "system",
-                    "content": "Validation complete. Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."
+                    "content": "Validation complete. Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Be warm, friendly, and decisive. Use plain, upbeat language. Do not call tools."
                 })
                 try:
                     resp = await self._achat_once(messages, model, role, tool_choice_override="none")
@@ -1198,7 +1198,7 @@ class Agent:
                     if allowed_to_finalize:
                         messages.append({
                             "role": "system",
-                            "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."
+                            "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Be warm, friendly, and decisive. Use plain, upbeat language. Do not call tools."
                         })
                         if stream_final_to_callback is not None:
                             try:
@@ -1256,7 +1256,7 @@ class Agent:
             "choices": [
                 {
                     "message": {
-                        "content": "Proceeding with best-effort result given the iteration limit."
+                        "content": "Here's what I found with the time available. I've done my best to help with your request!"
                     }
                 }
             ]
