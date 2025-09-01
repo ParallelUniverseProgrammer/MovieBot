@@ -708,11 +708,22 @@ class Agent:
             if force_finalize_next:
                 next_tool_choice_override = "none"
         # If we exhausted iterations and still have tool calls requested, synthesize a graceful reply
+        # Determine the likely reason for hitting the iteration limit
+        reason = "processing your request"
+        if must_write and not write_completed:
+            reason = "trying to complete the requested action"
+        elif seen_write_intent and not write_completed:
+            reason = "attempting to perform the requested operation"
+        elif require_validation_read and not validation_done:
+            reason = "validating the completed action"
+        elif write_completed and not validation_done:
+            reason = "confirming the action was successful"
+        
         synthesized = {
             "choices": [
                 {
                     "message": {
-                        "content": "Here's what I found with the time available. I've done my best to help with your request!"
+                        "content": f"I hit my processing limit while {reason}, but here's what I found with the time available!"
                     }
                 }
             ]

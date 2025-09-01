@@ -21,8 +21,6 @@ class SonarrClient:
         
         # Avoid binding an AsyncClient to a specific event loop; create per-call clients instead
         self._client = None
-        
-        print(f"🔗 Sonarr client initialized for: {self.base_url}")
 
     def _new_client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
