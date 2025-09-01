@@ -64,6 +64,10 @@ tools:
   perTool:
     tmdb_search:
       timeoutMs: 2000
+    smart_recommendations:
+      timeoutMs: 8000
+    intelligent_search:
+      timeoutMs: 8000
   hedgeDelayMsByFamily:
     tmdb: 150
   listMaxItemsByFamily:

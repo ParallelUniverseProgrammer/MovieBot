@@ -629,3 +629,62 @@ def make_query_household_preferences(project_root: Path, llm_client) -> Callable
             return {"error": f"Failed to query preferences: {str(e)}"}
 
     return impl
+
+
+def make_smart_recommendations(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    """AI-powered recommendations via SubAgent using preferences and TMDb signals."""
+    async def impl(args: dict) -> dict:
+        from bot.sub_agent import SubAgent
+
+        settings = load_settings(project_root)
+        config = load_runtime_config(project_root)
+        # Get provider and API key from settings/config, not from args
+        provider = (config.get("llm", {}) or {}).get("provider", "openai")
+        api_key = settings.openai_api_key or (config.get("llm", {}) or {}).get("apiKey", "")
+
+        sub_agent = SubAgent(api_key=api_key, project_root=project_root, provider=provider)
+        try:
+            seed_tmdb_id = args.get("seed_tmdb_id")
+            seed_tmdb_id = int(seed_tmdb_id) if seed_tmdb_id is not None else None
+            prompt = args.get("prompt")
+            max_results = int(args.get("max_results", 3))
+            media_type = str(args.get("media_type", "movie"))
+            return await sub_agent.handle_smart_recommendations(
+                seed_tmdb_id=seed_tmdb_id,
+                prompt=prompt,
+                max_results=max_results,
+                media_type=media_type,
+            )
+        finally:
+            # LLM client cleanup is handled automatically
+            pass
+
+    return impl
+
+
+def make_intelligent_search(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    """Intelligent search that combines TMDb multi-search with Plex search via SubAgent."""
+    async def impl(args: dict) -> dict:
+        from bot.sub_agent import SubAgent
+
+        settings = load_settings(project_root)
+        config = load_runtime_config(project_root)
+        # Get provider and API key from settings/config, not from args
+        provider = (config.get("llm", {}) or {}).get("provider", "openai")
+        api_key = settings.openai_api_key or (config.get("llm", {}) or {}).get("apiKey", "")
+
+        sub_agent = SubAgent(api_key=api_key, project_root=project_root, provider=provider)
+        try:
+            query = str(args.get("query", "")).strip()
+            limit = int(args.get("limit", 10))
+            response_level = args.get("response_level")
+            return await sub_agent.handle_intelligent_search(
+                query=query,
+                limit=limit,
+                response_level=response_level,
+            )
+        finally:
+            # LLM client cleanup is handled automatically
+            pass
+
+    return impl

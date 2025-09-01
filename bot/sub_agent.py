@@ -22,7 +22,8 @@ class SubAgent:
         from config.loader import resolve_llm_selection, load_settings
         prov, _sel = resolve_llm_selection(project_root, "worker", load_settings(project_root))
         self.llm = LLMClient(api_key, provider=prov)
-        self.openai_tools, self.tool_registry = build_openai_tools_and_registry(project_root, self.llm)
+        # Create tool registry WITHOUT LLM client to avoid circular dependencies
+        self.openai_tools, self.tool_registry = build_openai_tools_and_registry(project_root, None)
         self.project_root = project_root
         self.log = logging.getLogger("moviebot.sub_agent")
 
@@ -364,4 +365,250 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
                 "error": str(e),
                 "series_id": series_id,
                 "quality_updated": False
+            }
+
+    async def handle_smart_recommendations(
+        self,
+        *,
+        seed_tmdb_id: int | None = None,
+        prompt: str | None = None,
+        max_results: int = 3,
+        media_type: str = "movie",
+    ) -> Dict[str, Any]:
+        """
+        Provide AI-powered recommendations using household preferences and TMDb signals.
+
+        Single-iteration, context-efficient workflow:
+        - Always load compact household preferences for grounding
+        - If seed_tmdb_id provided (movie), fetch TMDb recommendations for it
+        - Otherwise fetch trending/popular lists as candidates
+        - Return a concise, friendly recommendation list with brief reasons
+
+        Note: Availability checks are not performed here (kept lightweight).
+        """
+        self.log.info(
+            f"Starting smart recommendations (seed_tmdb_id={seed_tmdb_id}, max_results={max_results}, media_type={media_type})"
+        )
+        
+        try:
+            system_prompt = (
+            "You are a focused recommendation sub-agent. Use minimal tools in one pass.\n"
+            "1) Load compact household preferences for taste grounding.\n"
+            "2) If a seed TMDb id is provided and media_type==movie, call tmdb_recommendations for it.\n"
+            "   Otherwise, fetch a reasonable small candidate set via tmdb_trending or tmdb_popular_movies (movies only).\n"
+            "3) Select up to max_results items aligned with preferences.\n"
+            "4) Produce a concise, user-facing list: Title (Year) — one-sentence why it fits.\n"
+            "Do not call tools in the finalization step."
+        )
+
+            mt = (media_type or "movie").strip().lower()
+            if mt not in ("movie", "tv", "all"):
+                mt = "movie"
+
+            from config.loader import resolve_llm_selection
+            _, sel = resolve_llm_selection(self.project_root, "worker")
+            model = sel.get("model", "gpt-5-nano")
+
+            user_instructions = (
+                f"Household-aligned recommendations. max_results={max_results}. media_type={mt}.\n"
+                f"Seed TMDb id: {seed_tmdb_id if seed_tmdb_id is not None else '-'}\n"
+                f"User prompt (optional): {prompt or '-'}\n"
+                "Tools to consider: read_household_preferences (compact), tmdb_recommendations, tmdb_trending, tmdb_popular_movies, tmdb_movie_details."
+            )
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_instructions},
+            ]
+
+            response = await self._achat_once(messages, model, "worker")
+
+            try:
+                content = response.choices[0].message.content or ""
+                tool_calls = getattr(response.choices[0].message, "tool_calls", None)
+
+                if tool_calls:
+                    self.log.info(f"Sub-agent executing {len(tool_calls)} tool calls for smart recommendations")
+                    results = await self._execute_tool_calls(tool_calls)
+
+                    final_messages = messages + [
+                        {
+                            "role": "assistant",
+                            "content": content,
+                            "tool_calls": [
+                                {
+                                    "id": tc.id,
+                                    "type": tc.type,
+                                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                                }
+                                for tc in tool_calls
+                            ],
+                        }
+                    ] + [
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": tc.function.name,
+                            "content": json.dumps(result),
+                        }
+                        for tc, result in zip(tool_calls, results)
+                    ]
+
+                    final_messages.append({
+                        "role": "system",
+                        "content": "Finalize now: produce a concise, friendly list of up to max_results recommendations with one-sentence reasons. Do not call tools.",
+                    })
+                    final_response = await self._achat_once(final_messages, model, "worker", tool_choice_override="none")
+                    final_content = final_response.choices[0].message.content or ""
+                    self.log.info(f"Smart recommendations completed. Final response: {final_content[:200]}...")
+                    return {
+                        "success": True,
+                        "content": final_content,
+                        "seed_tmdb_id": seed_tmdb_id,
+                        "max_results": max_results,
+                        "media_type": mt,
+                    }
+                else:
+                    self.log.warning("No tool calls made by sub-agent for smart recommendations")
+                    return {
+                        "success": True,
+                        "content": content,
+                        "seed_tmdb_id": seed_tmdb_id,
+                        "max_results": max_results,
+                        "media_type": mt,
+                        "warning": "No tool calls made",
+                    }
+            except Exception as e:
+                self.log.error(f"Error in smart recommendations: {e}")
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "seed_tmdb_id": seed_tmdb_id,
+                    "max_results": max_results,
+                    "media_type": mt,
+                }
+        except Exception as e:
+            self.log.error(f"Error in smart recommendations (outer): {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "seed_tmdb_id": seed_tmdb_id,
+                "max_results": max_results,
+                "media_type": media_type,
+            }
+
+    async def handle_intelligent_search(
+        self,
+        *,
+        query: str,
+        limit: int = 10,
+        response_level: str | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Perform intelligent search by combining TMDb multi-search with Plex search, then
+        produce a concise, deduplicated summary with relevance notes.
+
+        Single-iteration flow:
+        - Call tmdb_search_multi(query)
+        - Call search_plex(query, limit, response_level=compact)
+        - Finalize with a merged view (no further tool calls)
+        """
+        q = (query or "").strip()
+        if not q:
+            return {"success": False, "error": "query_required"}
+
+        self.log.info(f"Starting intelligent search for query='{q}', limit={limit}")
+        
+        try:
+            system_prompt = (
+            "You are a focused search sub-agent. In a single batch of tool calls:\n"
+            "1) Call tmdb_search_multi with the raw user query.\n"
+            "2) Call search_plex with the same query (limit as provided, response_level compact).\n"
+            "Then finalize with a concise merged list highlighting strong matches and availability hints.\n"
+            "Do not call tools in the finalization step."
+        )
+
+            from config.loader import resolve_llm_selection
+            _, sel = resolve_llm_selection(self.project_root, "worker")
+            model = sel.get("model", "gpt-5-nano")
+
+            user_instructions = (
+                f"query={q}\nlimit={int(limit)}\nresponse_level={response_level or 'compact'}"
+            )
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_instructions},
+            ]
+
+            response = await self._achat_once(messages, model, "worker")
+
+            try:
+                content = response.choices[0].message.content or ""
+                tool_calls = getattr(response.choices[0].message, "tool_calls", None)
+
+                if tool_calls:
+                    self.log.info(f"Sub-agent executing {len(tool_calls)} tool calls for intelligent search")
+                    results = await self._execute_tool_calls(tool_calls)
+
+                    final_messages = messages + [
+                        {
+                            "role": "assistant",
+                            "content": content,
+                            "tool_calls": [
+                                {
+                                    "id": tc.id,
+                                    "type": tc.type,
+                                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                                }
+                                for tc in tool_calls
+                            ],
+                        }
+                    ] + [
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": tc.function.name,
+                            "content": json.dumps(result),
+                        }
+                        for tc, result in zip(tool_calls, results)
+                    ]
+
+                    final_messages.append({
+                        "role": "system",
+                        "content": "Finalize now: produce a concise merged result list with brief explanations and availability hints. Do not call tools.",
+                    })
+                    final_response = await self._achat_once(final_messages, model, "worker", tool_choice_override="none")
+                    final_content = final_response.choices[0].message.content or ""
+                    self.log.info(f"Intelligent search completed. Final response: {final_content[:200]}...")
+                    return {
+                        "success": True,
+                        "content": final_content,
+                        "query": q,
+                        "limit": int(limit),
+                    }
+                else:
+                    self.log.warning("No tool calls made by sub-agent for intelligent search")
+                    return {
+                        "success": True,
+                        "content": content,
+                        "query": q,
+                        "limit": int(limit),
+                        "warning": "No tool calls made",
+                    }
+            except Exception as e:
+                self.log.error(f"Error in intelligent search: {e}")
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "query": q,
+                    "limit": int(limit),
+                }
+        except Exception as e:
+            self.log.error(f"Error in intelligent search (outer): {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "query": q,
+                "limit": int(limit),
             }

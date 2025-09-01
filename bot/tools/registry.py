@@ -14,6 +14,8 @@ from .tool_impl import (
     make_search_household_preferences,
     make_update_household_preferences,
     make_query_household_preferences,
+    make_smart_recommendations,
+    make_intelligent_search,
 )
 from .tool_impl_plex import (
     make_get_plex_movies_4k_or_hdr,
@@ -580,6 +582,17 @@ def _define_openai_tools() -> List[Dict[str, Any]]:
         fn("query_household_preferences", "Query household preferences using GPT-5 and get a concise one-sentence answer.", {
             "query": {"type": "string", "description": "The question to ask about household preferences"}
         }),
+        fn("smart_recommendations", "AI-powered recommendations using preferences and TMDb signals via a sub-agent.", {
+            "seed_tmdb_id": {"type": ["integer", "null"], "description": "Seed TMDb movie id for recommendations (optional)"},
+            "prompt": {"type": ["string", "null"], "description": "Optional freeform prompt to steer recommendations"},
+            "max_results": {"type": ["integer", "null"], "description": "Maximum number of items to return (default 3)"},
+            "media_type": {"type": ["string", "null"], "enum": ["movie", "tv", "all"], "description": "Media type focus (default movie)"}
+        }),
+        fn("intelligent_search", "Intelligent search that merges TMDb multi-search with Plex search via a sub-agent.", {
+            "query": {"type": "string", "description": "Raw user query"},
+            "limit": {"type": ["integer", "null"], "description": "Max results for Plex search (default 10)"},
+            "response_level": {"type": ["string", "null"], "enum": ["minimal", "compact", "standard", "detailed"], "description": "Plex response granularity (default compact)"}
+        }),
     ]
 
 
@@ -690,6 +703,8 @@ def build_openai_tools_and_registry(project_root: Path, llm_client=None) -> Tupl
     tools.register("update_household_preferences", make_update_household_preferences(project_root))
     if llm_client:
         tools.register("query_household_preferences", make_query_household_preferences(project_root, llm_client))
+    tools.register("smart_recommendations", make_smart_recommendations(project_root))
+    tools.register("intelligent_search", make_intelligent_search(project_root))
     # Utility: fetch cached results
     tools.register("fetch_cached_result", make_fetch_cached_result(project_root))
 
