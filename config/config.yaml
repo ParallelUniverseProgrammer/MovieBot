@@ -8,7 +8,7 @@ sonarr:
   rootFolderPath: "D:\\TV"
 llm:
   agentMaxIters: 6
-  workerMaxIters: 2
+  workerMaxIters: 4
   providers:
     priority: [openai, openrouter]
     openai:
