@@ -38,7 +38,7 @@ llm:
         model: gpt-4.1-mini
         #reasoningEffort: medium
         params:
-          max_response_tokens: 250
+          max_tokens: 250
           temperature: 1
     openrouter:
       chat: z-ai/glm-4.5-air:free
