@@ -269,6 +269,105 @@ pytest tests/ -v --cov=bot --cov=integrations --cov=config --cov-report=term-mis
 
 ---
 
+## 🐛 Debugging with trace_agent.py
+
+When MovieBot isn't behaving as expected, `trace_agent.py` is your best friend for understanding what's happening under the hood. This debugging tool runs the agent once and captures a detailed trace of every step, tool call, and decision.
+
+### Usage
+```bash
+# Basic usage with default message
+python scripts/trace_agent.py
+
+# Custom message
+python scripts/trace_agent.py --message "Find me a thriller with Pedro Pascal"
+
+# Pretty-print the final response
+python scripts/trace_agent.py --message "Show me my unwatched movies" --pretty
+
+# Limit trace output (useful for long-running queries)
+python scripts/trace_agent.py --max-events 50
+```
+
+### What You'll See
+
+The trace shows you:
+- **Agent planning** — how the agent breaks down your request
+- **Tool execution** — which APIs are called and how long they take
+- **LLM reasoning** — the model's decision-making process
+- **Phase transitions** — read-only vs write operations
+- **Performance metrics** — timing for each operation
+
+### Example Trace Output
+
+Here's what a complex compound query looks like:
+
+```bash
+$ python scripts/trace_agent.py --message "Show me all the horror movies in my Plex library from 2020-2023, sorted by rating, and tell me which ones I haven't watched yet"
+
+[agent.start] Kicking off a plan and launching up to 12 tasks in parallel for 6 steps.
+[heartbeat] Still working—keeping things moving in the background.
+[thinking] Thinking through options (iteration 1/6) with a bias for decisive parallel moves.
+[llm.start] Consulting gpt-5-mini to sketch the best next set of actions.
+[llm.finish] LLM plan refined; executing the most promising actions now.
+[phase.read_only] Phase Read_Only in progress.
+[tool.start] Starting search plex (search_plex) to advance the goal.
+[tool.finish] Finished search plex (search_plex) in 93 ms; folding results into the plan.
+[heartbeat] Still working—keeping things moving in the background.
+[thinking] Thinking through options (iteration 3/6) with a bias for decisive parallel moves.
+[llm.start] Consulting gpt-5-mini to sketch the best next set of actions.
+[heartbeat] Still working—keeping things moving in the background.
+[llm.finish] LLM plan refined; executing the most promising actions now.
+[tool.start] Starting search plex (search_plex) to advance the goal.
+[tool.finish] Finished search plex (search_plex) in 241 ms; folding results into the plan.
+[thinking] Thinking through options (iteration 5/6) with a bias for decisive parallel moves.
+[llm.start] Consulting gpt-5-mini to sketch the best next set of actions.
+[heartbeat] Still working—keeping things moving in the background.
+[llm.finish] LLM plan refined; executing the most promising actions now.
+[agent.finish] Wrapping up—returning the final picks now.
+
+=== TRACE (tail) ===
+[
+  {
+    "kind": "agent.start",
+    "detail": "Kicking off a plan and launching up to 12 tasks in parallel for 6 steps."
+  },
+  {
+    "kind": "phase.read_only",
+    "detail": "Phase Read_Only in progress."
+  },
+  {
+    "kind": "tool.start",
+    "detail": "Starting search plex (search_plex) to advance the goal."
+  },
+  {
+    "kind": "tool.finish",
+    "detail": "Finished search plex (search_plex) in 93 ms; folding results into the plan."
+  }
+  // ... more events
+]
+
+=== RESPONSE ===
+Running your library search and filters now — here are the horror movies from 2020–2023 in your Plex, sorted by rating (I checked Plex for watched status too):
+
+- No results found for Horror movies between 2020–2023 in your Plex [Plex]
+
+If you expected titles from 2020–2023 to appear, would you like me to:
+- broaden the year range (e.g., 2018–2023), or
+- search for related genres (thriller/psychological) or specific titles to add?
+```
+
+### Why It's Super Useful
+
+- **Performance debugging** — see exactly which API calls are slow
+- **Logic flow** — understand how the agent interprets complex requests
+- **Error isolation** — pinpoint where things go wrong
+- **Optimization** — identify redundant or inefficient operations
+- **Development** — verify new features work as expected
+
+Perfect for troubleshooting why a query didn't return expected results or why it's taking longer than usual.
+
+---
+
 ## 🔒 Security & Privacy
 
 - Local‑first: your media stays on your server  
