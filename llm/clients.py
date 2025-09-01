@@ -88,9 +88,7 @@ class OpenRouterClient:
         params: Dict[str, Any] = {"model": model, "messages": messages}
         if tools is not None:
             params["tools"] = tools
-        # Reasoning param (top-level per SDK expectations)
-        if reasoning is not None:
-            params["reasoning"] = {"effort": reasoning}
+        # OpenRouter doesn't support reasoning parameter, so we ignore it
         # Only include tool_choice when tools are provided
         if (tools is not None) and (tool_choice is not None):
             params["tool_choice"] = tool_choice
@@ -111,8 +109,7 @@ class OpenRouterClient:
         params: Dict[str, Any] = {"model": model, "messages": messages}
         if tools is not None:
             params["tools"] = tools
-        if reasoning is not None:
-            params["reasoning"] = {"effort": reasoning}
+        # OpenRouter doesn't support reasoning parameter, so we ignore it
         if (tools is not None) and (tool_choice is not None):
             params["tool_choice"] = tool_choice
         # Normalize any provided kwargs
@@ -135,8 +132,7 @@ class OpenRouterClient:
         params: Dict[str, Any] = {"model": model, "messages": messages}
         if tools is not None:
             params["tools"] = tools
-        if reasoning is not None:
-            params["reasoning"] = {"effort": reasoning}
+        # OpenRouter doesn't support reasoning parameter, so we ignore it
         if (tools is not None) and (tool_choice is not None):
             params["tool_choice"] = tool_choice
         kwargs = self._normalize_params(kwargs)

@@ -90,9 +90,11 @@ async def test_llmclient_openai_async_chat_reasoning_and_tool_choice():
     c = LLMClient("key", provider="openai")
     with patch.object(c.async_client.chat.completions, "create", new_callable=AsyncMock) as mock_acreate:
         mock_acreate.return_value = {"id": "x"}
+        tools = [{"type": "function", "function": {"name": "test_func", "description": "test"}}]
         out = await c.achat(
             model="gpt-5-mini",
             messages=[{"role": "user", "content": "hi"}],
+            tools=tools,
             tool_choice="required",
             reasoning="high",
         )
@@ -108,7 +110,8 @@ def test_llmclient_openrouter_sync_chat_passthrough():
         mock_create.return_value = Mock()
         c.chat(model="z-ai/glm-4.5-air:free", messages=[{"role": "user", "content": "hi"}], reasoning="medium")
         args = mock_create.call_args.kwargs
-        assert args["reasoning"] == {"effort": "medium"}
+        # OpenRouter doesn't support reasoning parameter, so it should not be passed
+        assert "reasoning" not in args
         assert "extra_headers" in args
 
 
@@ -120,7 +123,8 @@ async def test_llmclient_openrouter_async_chat_passthrough():
         out = await c.achat(model="z-ai/glm-4.5-air:free", messages=[{"role": "user", "content": "hi"}], reasoning="high")
         assert out == {"ok": True}
         args = mock_acreate.call_args.kwargs
-        assert args["reasoning"] == {"effort": "high"}
+        # OpenRouter doesn't support reasoning parameter, so it should not be passed
+        assert "reasoning" not in args
         assert "extra_headers" in args
 
 
