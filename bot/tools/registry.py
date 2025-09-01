@@ -80,6 +80,10 @@ from .tool_impl_radarr import (
     make_radarr_root_folders,
     make_radarr_get_indexers,
     make_radarr_get_download_clients,
+    # Enhanced Radarr Sub-Agent Tools
+    make_radarr_movie_addition_fallback,
+    make_radarr_activity_check,
+    make_radarr_quality_fallback,
 )
 from .tool_impl_sonarr import (
     make_sonarr_lookup,
@@ -431,6 +435,32 @@ def _define_openai_tools() -> List[Dict[str, Any]]:
         fn("radarr_get_indexers", "Get indexers from Radarr.", {}),
         fn("radarr_get_download_clients", "Get download clients from Radarr.", {}),
         
+        # Enhanced Radarr Sub-Agent Tools
+        fn("radarr_movie_addition_fallback", "Add a movie to Radarr with intelligent quality fallback when preferred quality isn't available.", {
+            "tmdb_id": {"type": "integer", "description": "TMDb movie ID"},
+            "movie_title": {"type": "string", "description": "Movie title for context"},
+            "preferred_quality": {"type": ["string", "null"], "description": "Preferred quality profile name"},
+            "fallback_qualities": {"type": ["array", "null"], "description": "List of fallback quality profiles to try", "items": {"type": "string"}},
+            "provider": {"type": ["string", "null"], "description": "LLM provider override"},
+            "api_key": {"type": ["string", "null"], "description": "LLM API key override"}
+        }),
+        fn("radarr_activity_check", "Check Radarr activity status including queue, wanted movies, and upcoming releases (READ-ONLY).", {
+            "check_queue": {"type": ["boolean", "null"], "description": "Whether to check the download queue (default: true)"},
+            "check_wanted": {"type": ["boolean", "null"], "description": "Whether to check wanted/missing movies (default: true)"},
+            "check_calendar": {"type": ["boolean", "null"], "description": "Whether to check upcoming releases (default: false)"},
+            "max_results": {"type": ["integer", "null"], "description": "Maximum number of results to return per category (default: 10)"},
+            "provider": {"type": ["string", "null"], "description": "LLM provider override"},
+            "api_key": {"type": ["string", "null"], "description": "LLM API key override"}
+        }),
+        fn("radarr_quality_fallback", "Update a movie's quality profile with fallback when preferred quality isn't available.", {
+            "movie_id": {"type": "integer", "description": "Radarr movie ID"},
+            "movie_title": {"type": "string", "description": "Movie title for context"},
+            "target_quality": {"type": "string", "description": "Preferred quality profile name"},
+            "fallback_qualities": {"type": "array", "description": "List of fallback quality profiles to try", "items": {"type": "string"}},
+            "provider": {"type": ["string", "null"], "description": "LLM provider override"},
+            "api_key": {"type": ["string", "null"], "description": "LLM API key override"}
+        }),
+        
         # Sonarr Tools
         fn("sonarr_lookup", "Lookup a series in Sonarr by search term.", {"term": {"type": "string"}}),
         fn("sonarr_add_series", "Add a series to Sonarr by TVDb id.", {
@@ -665,6 +695,11 @@ def build_openai_tools_and_registry(project_root: Path, llm_client=None) -> Tupl
     tools.register("radarr_root_folders", make_radarr_root_folders(project_root))
     tools.register("radarr_get_indexers", make_radarr_get_indexers(project_root))
     tools.register("radarr_get_download_clients", make_radarr_get_download_clients(project_root))
+    
+    # Enhanced Radarr Sub-Agent Tools
+    tools.register("radarr_movie_addition_fallback", make_radarr_movie_addition_fallback(project_root))
+    tools.register("radarr_activity_check", make_radarr_activity_check(project_root))
+    tools.register("radarr_quality_fallback", make_radarr_quality_fallback(project_root))
     
     # Sonarr tools
     tools.register("sonarr_lookup", make_sonarr_lookup(project_root))

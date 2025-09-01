@@ -612,3 +612,348 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
                 "query": q,
                 "limit": int(limit),
             }
+
+    async def handle_radarr_movie_addition_fallback(
+        self,
+        *,
+        tmdb_id: int,
+        movie_title: str,
+        preferred_quality: str | None = None,
+        fallback_qualities: List[str] | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Handle movie addition with quality fallback when preferred quality isn't available.
+        
+        Args:
+            tmdb_id: TMDb movie ID
+            movie_title: Movie title for context
+            preferred_quality: Preferred quality profile name
+            fallback_qualities: List of fallback quality profiles to try
+            
+        Returns:
+            Dict with movie addition results and quality used
+        """
+        self.log.info(f"Starting Radarr movie addition fallback for {movie_title} (TMDb ID: {tmdb_id})")
+        
+        system_prompt = f"""You are a focused Radarr movie addition agent. Your task is to add a movie with intelligent quality fallback.
+
+Movie: {movie_title} (TMDb ID: {tmdb_id})
+Preferred Quality: {preferred_quality or 'default'}
+Fallback Qualities: {', '.join(fallback_qualities) if fallback_qualities else 'none specified'}
+
+CRITICAL REQUIREMENTS:
+1. First check available quality profiles using radarr_quality_profiles
+2. If preferred quality is specified, try to use it
+3. If preferred quality isn't available, use the best available fallback quality
+4. Add the movie using radarr_add_movie with the selected quality
+5. Provide a clear summary of what was added and which quality was used
+
+WORKFLOW:
+1. Call radarr_quality_profiles to get available quality profiles
+2. Select the best available quality (preferred > fallback > default)
+3. Call radarr_add_movie with the selected quality profile ID
+4. Provide a summary of the addition
+
+Available tools: radarr_quality_profiles, radarr_add_movie, radarr_root_folders
+
+Remember: Always add the movie even if the preferred quality isn't available!
+"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Add movie '{movie_title}' (TMDb ID: {tmdb_id}) to Radarr with intelligent quality selection. Preferred: {preferred_quality or 'default'}, Fallbacks: {', '.join(fallback_qualities) if fallback_qualities else 'none'}."}
+        ]
+
+        from config.loader import resolve_llm_selection
+        _, sel = resolve_llm_selection(self.project_root, "worker")
+        model = sel.get("model", "gpt-5-nano")
+
+        response = await self._achat_once(messages, model, "worker")
+        
+        try:
+            content = response.choices[0].message.content or ""
+            tool_calls = getattr(response.choices[0].message, "tool_calls", None)
+            
+            if tool_calls:
+                self.log.info(f"Sub-agent executing {len(tool_calls)} tool calls for Radarr movie addition")
+                results = await self._execute_tool_calls(tool_calls)
+                
+                final_messages = messages + [
+                    {"role": "assistant", "content": content, "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        }
+                        for tc in tool_calls
+                    ]}
+                ] + [
+                    {"role": "tool", "tool_call_id": tc.id, "name": tc.function.name, "content": json.dumps(result)}
+                    for tc, result in zip(tool_calls, results)
+                ]
+                
+                final_messages.append({"role": "system", "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."})
+                final_response = await self._achat_once(final_messages, model, "worker", tool_choice_override="none")
+                final_content = final_response.choices[0].message.content or ""
+                
+                self.log.info(f"Radarr movie addition completed. Final response: {final_content[:200]}...")
+                
+                return {
+                    "success": True,
+                    "content": final_content,
+                    "tmdb_id": tmdb_id,
+                    "movie_title": movie_title,
+                    "preferred_quality": preferred_quality,
+                    "fallback_qualities": fallback_qualities,
+                    "tool_calls_executed": len(tool_calls)
+                }
+            else:
+                self.log.warning(f"No tool calls made by sub-agent for Radarr movie addition")
+                return {
+                    "success": True,
+                    "content": content,
+                    "tmdb_id": tmdb_id,
+                    "movie_title": movie_title,
+                    "preferred_quality": preferred_quality,
+                    "fallback_qualities": fallback_qualities,
+                    "warning": "No tool calls made - movie may not have been added"
+                }
+                
+        except Exception as e:
+            self.log.error(f"Error in Radarr movie addition fallback: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "tmdb_id": tmdb_id,
+                "movie_title": movie_title,
+                "preferred_quality": preferred_quality,
+                "fallback_qualities": fallback_qualities
+            }
+
+    async def handle_radarr_activity_check(
+        self,
+        *,
+        check_queue: bool = True,
+        check_wanted: bool = True,
+        check_calendar: bool = False,
+        max_results: int = 10,
+    ) -> Dict[str, Any]:
+        """
+        Check Radarr activity status including queue, wanted movies, and upcoming releases.
+        
+        Args:
+            check_queue: Whether to check the download queue
+            check_wanted: Whether to check wanted/missing movies
+            check_calendar: Whether to check upcoming releases
+            max_results: Maximum number of results to return per category
+            
+        Returns:
+            Dict with activity status and summaries
+        """
+        self.log.info(f"Starting Radarr activity check (queue={check_queue}, wanted={check_wanted}, calendar={check_calendar})")
+        
+        system_prompt = f"""You are a focused Radarr activity monitoring agent. Your task is to check current activity status.
+
+Activity Checks:
+- Queue Status: {check_queue}
+- Wanted Movies: {check_wanted}  
+- Upcoming Calendar: {check_calendar}
+- Max Results: {max_results}
+
+CRITICAL REQUIREMENTS:
+1. This is a READ-ONLY operation - do not make any changes to Radarr
+2. Check the specified activity categories
+3. Provide concise summaries of current status
+4. Highlight any issues or notable activity
+
+WORKFLOW:
+1. Check queue status if requested using radarr_get_queue
+2. Check wanted movies if requested using radarr_get_wanted
+3. Check calendar if requested using radarr_get_calendar
+4. Provide a summary of current activity
+
+Available tools: radarr_get_queue, radarr_get_wanted, radarr_get_calendar, radarr_system_status
+
+Remember: This is information gathering only - no modifications!
+"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Check Radarr activity status. Queue: {check_queue}, Wanted: {check_wanted}, Calendar: {check_calendar}. Max {max_results} results per category."}
+        ]
+
+        from config.loader import resolve_llm_selection
+        _, sel = resolve_llm_selection(self.project_root, "worker")
+        model = sel.get("model", "gpt-5-nano")
+
+        response = await self._achat_once(messages, model, "worker")
+        
+        try:
+            content = response.choices[0].message.content or ""
+            tool_calls = getattr(response.choices[0].message, "tool_calls", None)
+            
+            if tool_calls:
+                self.log.info(f"Sub-agent executing {len(tool_calls)} tool calls for Radarr activity check")
+                results = await self._execute_tool_calls(tool_calls)
+                
+                final_messages = messages + [
+                    {"role": "assistant", "content": content, "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        }
+                        for tc in tool_calls
+                    ]}
+                ] + [
+                    {"role": "tool", "tool_call_id": tc.id, "name": tc.function.name, "content": json.dumps(result)}
+                    for tc, result in zip(tool_calls, results)
+                ]
+                
+                final_messages.append({"role": "system", "content": "Finalize now: produce a concise, friendly user-facing summary of Radarr activity with no meta-instructions or headings. Do not call tools."})
+                final_response = await self._achat_once(final_messages, model, "worker", tool_choice_override="none")
+                final_content = final_response.choices[0].message.content or ""
+                
+                self.log.info(f"Radarr activity check completed. Final response: {final_content[:200]}...")
+                
+                return {
+                    "success": True,
+                    "content": final_content,
+                    "check_queue": check_queue,
+                    "check_wanted": check_wanted,
+                    "check_calendar": check_calendar,
+                    "max_results": max_results,
+                    "tool_calls_executed": len(tool_calls)
+                }
+            else:
+                self.log.warning(f"No tool calls made by sub-agent for Radarr activity check")
+                return {
+                    "success": True,
+                    "content": content,
+                    "check_queue": check_queue,
+                    "check_wanted": check_wanted,
+                    "check_calendar": check_calendar,
+                    "max_results": max_results,
+                    "warning": "No tool calls made - activity may not have been checked"
+                }
+                
+        except Exception as e:
+            self.log.error(f"Error in Radarr activity check: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "check_queue": check_queue,
+                "check_wanted": check_wanted,
+                "check_calendar": check_calendar,
+                "max_results": max_results
+            }
+
+    async def handle_radarr_quality_fallback(
+        self,
+        *,
+        movie_id: int,
+        movie_title: str,
+        target_quality: str,
+        fallback_qualities: List[str],
+    ) -> Dict[str, Any]:
+        """
+        Handle quality fallback for existing movies when preferred quality isn't available.
+        
+        Args:
+            movie_id: Radarr movie ID
+            movie_title: Movie title for context
+            target_quality: Preferred quality profile name
+            fallback_qualities: List of fallback quality profiles to try
+            
+        Returns:
+            Dict with quality update results
+        """
+        self.log.info(f"Starting Radarr quality fallback for {movie_title} (ID: {movie_id})")
+        
+        system_prompt = f"""You are a focused Radarr quality management agent. Your task is to update a movie's quality profile when the preferred quality isn't available.
+
+Movie: {movie_title} (ID: {movie_id})
+Target Quality: {target_quality}
+Fallback Qualities: {', '.join(fallback_qualities)}
+
+Your mission:
+1. Check available quality profiles using radarr_quality_profiles
+2. Update the movie to use the best available fallback quality
+3. Provide a clear summary of what was changed
+
+WORKFLOW:
+1. Call radarr_quality_profiles to get available quality profiles
+2. Select the best available fallback quality
+3. Call radarr_update_movie with the new quality profile ID
+4. Provide a summary of the quality change
+
+Available tools: radarr_quality_profiles, radarr_update_movie, radarr_get_movies
+
+Remember: Update to the best available quality from the fallback list!
+"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Update movie '{movie_title}' (ID: {movie_id}) to use the best available quality from {', '.join(fallback_qualities)} since {target_quality} isn't available."}
+        ]
+
+        from config.loader import resolve_llm_selection
+        _, sel = resolve_llm_selection(self.project_root, "worker")
+        model = sel.get("model", "gpt-5-nano")
+
+        response = await self._achat_once(messages, model, "worker")
+        
+        try:
+            content = response.choices[0].message.content or ""
+            tool_calls = getattr(response.choices[0].message, "tool_calls", None)
+            
+            if tool_calls:
+                results = await self._execute_tool_calls(tool_calls)
+                
+                final_messages = messages + [
+                    {"role": "assistant", "content": content, "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        }
+                        for tc in tool_calls
+                    ]}
+                ] + [
+                    {"role": "tool", "tool_call_id": tc.id, "name": tc.function.name, "content": json.dumps(result)}
+                    for tc, result in zip(tool_calls, results)
+                ]
+                
+                final_messages.append({"role": "system", "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Do not call tools."})
+                final_response = await self._achat_once(final_messages, model, "worker", tool_choice_override="none")
+                return {
+                    "success": True,
+                    "content": final_response.choices[0].message.content,
+                    "movie_id": movie_id,
+                    "movie_title": movie_title,
+                    "target_quality": target_quality,
+                    "fallback_qualities": fallback_qualities,
+                    "quality_updated": True
+                }
+            else:
+                return {
+                    "success": True,
+                    "content": content,
+                    "movie_id": movie_id,
+                    "movie_title": movie_title,
+                    "target_quality": target_quality,
+                    "fallback_qualities": fallback_qualities,
+                    "quality_updated": False
+                }
+                
+        except Exception as e:
+            self.log.error(f"Error in Radarr quality fallback: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "movie_id": movie_id,
+                "movie_title": movie_title,
+                "target_quality": target_quality,
+                "fallback_qualities": fallback_qualities,
+                "quality_updated": False
+            }
