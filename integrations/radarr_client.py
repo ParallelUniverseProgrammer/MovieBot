@@ -117,15 +117,8 @@ class RadarrClient:
                 "images": details.get("images", []) or [],
                 "tags": details.get("tags", []) or [],
             })
-            try:
-                title = details.get("title")
-                year = details.get("year")
-                if title and year:
-                    base = str(root_folder_path).rstrip("/\\")
-                    sep = "\\" if (":" in base or "\\" in base) else "/"
-                    enriched_payload["path"] = base + sep + f"{title} ({year})"
-            except Exception:
-                pass
+            # Note: Do not set a custom 'path' field. Radarr will automatically
+            # create the folder structure based on rootFolderPath and movie details.
         enriched_payload = {k: v for k, v in enriched_payload.items() if v is not None}
         async with self._new_client() as client:
             r2 = await client.post("/api/v3/movie", json=enriched_payload)
