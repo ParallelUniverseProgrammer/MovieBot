@@ -2,7 +2,7 @@ import pytest
 from pathlib import Path
 import asyncio
 
-from bot.tools.registry import build_openai_tools_and_registry
+from bot.tools.registry_cache import get_cached_registry, initialize_registry_cache
 
 
 @pytest.mark.integration
@@ -15,7 +15,8 @@ class TestRegistryLiveTools:
     @pytest.fixture(scope="class")
     def registry(self):
         project_root = Path(__file__).parent.parent
-        _, reg = build_openai_tools_and_registry(project_root)
+        initialize_registry_cache(project_root)
+        _, reg = get_cached_registry()
         return reg
 
     @pytest.mark.asyncio

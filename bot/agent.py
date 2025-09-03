@@ -10,7 +10,7 @@ import time
 
 from llm.clients import LLMClient
 from .agent_prompt import build_agent_system_prompt
-from .tools.registry import build_openai_tools_and_registry
+from .tools.registry_cache import get_cached_registry
 from .tools.tool_impl import build_preferences_context  # reuse the same formatter
 from config.loader import load_runtime_config
 from .tool_summarizers import summarize_tool_result
@@ -25,7 +25,7 @@ class Agent:
         from config.loader import resolve_llm_selection, load_settings
         prov, _sel = resolve_llm_selection(project_root, "chat", load_settings(project_root))
         self.llm = LLMClient(api_key, provider=prov)
-        self.openai_tools, self.tool_registry = build_openai_tools_and_registry(project_root, self.llm)
+        self.openai_tools, self.tool_registry = get_cached_registry(self.llm)
         self.project_root = project_root
         self.log = logging.getLogger("moviebot.agent")
         self.progress_callback = progress_callback

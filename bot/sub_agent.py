@@ -7,7 +7,7 @@ import asyncio
 import logging
 
 from llm.clients import LLMClient
-from .tools.registry import build_openai_tools_and_registry
+from .tools.registry_cache import get_cached_registry
 from config.loader import load_runtime_config
 
 
@@ -22,8 +22,8 @@ class SubAgent:
         from config.loader import resolve_llm_selection, load_settings
         prov, _sel = resolve_llm_selection(project_root, "worker", load_settings(project_root))
         self.llm = LLMClient(api_key, provider=prov)
-        # Create tool registry WITHOUT LLM client to avoid circular dependencies
-        self.openai_tools, self.tool_registry = build_openai_tools_and_registry(project_root, None)
+        # Use cached tool registry (SubAgent doesn't need LLM client)
+        self.openai_tools, self.tool_registry = get_cached_registry(None)
         self.project_root = project_root
         self.log = logging.getLogger("moviebot.sub_agent")
 

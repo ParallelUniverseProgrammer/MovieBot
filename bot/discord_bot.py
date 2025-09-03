@@ -600,6 +600,10 @@ def build_client() -> MovieBotClient:
     intents.message_content = True  # required for reading user messages
     client = MovieBotClient(intents=intents)
     client.project_root = Path(__file__).resolve().parents[1]  # type: ignore[attr-defined]
+    
+    # Initialize tool registry cache at startup for performance
+    from .tools.registry_cache import initialize_registry_cache
+    initialize_registry_cache(client.project_root)
 
     @client.tree.command(name="ping", description="Health check")
     async def ping(interaction: discord.Interaction) -> None:

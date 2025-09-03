@@ -35,11 +35,11 @@ llm:
         params:
           max_tokens: 180
       summarizer:
-        model: gpt-4.1-mini
-        #reasoningEffort: medium
+        model: gpt-4.1-nano
+        #reasoningEffort: minimal
         params:
-          max_tokens: 250
-          temperature: 1
+          max_tokens: 300
+          temperature: 0.1
     openrouter:
       chat: z-ai/glm-4.5-air:free
       smart: z-ai/glm-4.5-air:free

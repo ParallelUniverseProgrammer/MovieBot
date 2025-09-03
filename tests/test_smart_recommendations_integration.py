@@ -11,7 +11,7 @@ import asyncio
 from pathlib import Path
 from unittest.mock import patch, Mock
 
-from bot.tools.registry import build_openai_tools_and_registry
+from bot.tools.registry_cache import get_cached_registry, initialize_registry_cache
 from bot.sub_agent import SubAgent
 
 
@@ -26,7 +26,9 @@ class TestSmartRecommendationsIntegration:
         # Mock the LLM client to avoid event loop issues during fixture creation
         from unittest.mock import Mock
         mock_llm = Mock()
-        _, reg = build_openai_tools_and_registry(project_root, mock_llm)
+        # Initialize cache for testing
+        initialize_registry_cache(project_root)
+        _, reg = get_cached_registry(mock_llm)
         return reg
 
     @pytest.fixture(scope="class")
