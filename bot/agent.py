@@ -244,23 +244,23 @@ class Agent:
                     return 1.0  # Write success is always high confidence
                 
                 # Read tool scoring based on content quality
-                score = 0.3  # Base score for successful read
+                score = 0.5  # Increased base score for successful read
                 
-                # Content richness bonus
+                # Content richness bonus - more generous for simple queries
                 for key in ("items", "results", "movies", "series", "episodes", "playlists", "collections"):
                     val = result.get(key)
                     if isinstance(val, list):
                         if len(val) > 0:
-                            score += 0.3  # Has content
-                        if len(val) >= 3:
-                            score += 0.2  # Rich content
-                        if len(val) >= 10:
+                            score += 0.4  # Increased bonus for having content
+                        if len(val) >= 1:  # Lowered threshold - even 1 item gets rich content bonus
+                            score += 0.2  # Rich content bonus
+                        if len(val) >= 5:  # Lowered threshold for very rich content
                             score += 0.1  # Very rich content
                 
-                # Metadata richness bonus
-                metadata_keys = ["title", "year", "rating", "genre", "summary", "description"]
+                # Metadata richness bonus - more generous scoring
+                metadata_keys = ["title", "year", "rating", "genre", "summary", "description", "overview", "tagline"]
                 metadata_count = sum(1 for key in metadata_keys if key in result and result[key])
-                score += min(metadata_count * 0.05, 0.2)  # Up to 0.2 bonus for metadata
+                score += min(metadata_count * 0.08, 0.3)  # Increased per-field bonus and max bonus
                 
                 return min(score, 1.0)
             
@@ -270,8 +270,13 @@ class Agent:
                 
                 total_score += tool_score * tool_weight
                 max_score += tool_weight
+                
+                # Debug logging for confidence calculation
+                self.log.debug(f"Tool {name}: score={tool_score:.2f}, weight={tool_weight}, weighted_score={tool_score * tool_weight:.2f}")
             
-            return total_score / max_score if max_score > 0 else 0.0
+            final_confidence = total_score / max_score if max_score > 0 else 0.0
+            self.log.debug(f"Final confidence: {final_confidence:.2f} (total={total_score:.2f}, max={max_score:.2f})")
+            return final_confidence
         except Exception:
             return 0.0
 
@@ -284,8 +289,8 @@ class Agent:
             # Calculate confidence score
             confidence = self._calculate_result_confidence(tool_name_and_results)
             
-            # High confidence threshold for finalization
-            if confidence >= 0.7:
+            # High confidence threshold for finalization - lowered for better responsiveness
+            if confidence >= 0.6:
                 return True
             
             # Check for write success (always finalizable)
@@ -312,8 +317,8 @@ class Agent:
             if any_error:
                 return False
             
-            # Medium confidence with some content
-            return confidence >= 0.4
+            # Medium confidence with some content - lowered for better responsiveness
+            return confidence >= 0.3
         except Exception:
             return False
 
@@ -1071,7 +1076,9 @@ class Agent:
                     allowed_to_finalize = self._results_indicate_finalizable(flattened_results)
                     
                     # Log confidence for debugging
-                    self.log.debug(f"Result confidence: {confidence:.2f}, finalizable: {allowed_to_finalize}")
+                    self.log.info(f"Result confidence: {confidence:.2f}, finalizable: {allowed_to_finalize}")
+                    if not allowed_to_finalize:
+                        self.log.info(f"Not finalizing: write_success={write_success}, allow_finalize_on_failure={allow_finalize_on_failure}, seen_write_intent={seen_write_intent}, must_write={must_write}")
                     
                     if write_success:
                         allowed_to_finalize = False
