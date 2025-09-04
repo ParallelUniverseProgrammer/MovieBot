@@ -993,32 +993,10 @@ class Agent:
                 async with sem:
                     return await run_one_or_batch(tc_or_group)
 
-            # PIPELINED EXECUTION: Start tool execution and next LLM call concurrently
+            # Execute tool calls first, then prepare for next iteration
             tool_execution_task = asyncio.gather(*[sem_wrapped(tc_or_group) for tc_or_group in tool_groups])
             
-            # Start next LLM call immediately if not finalizing
-            next_llm_task = None
-            if iter_idx < iters - 1:  # Not the last iteration
-                # Prepare messages for next iteration
-                temp_messages = messages.copy()
-                temp_messages.append({
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": tc.type,
-                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                        }
-                        for tc in tool_calls
-                    ],
-                })
-                next_llm_task = asyncio.create_task(
-                    self._achat_once(temp_messages, model, role, tool_choice_override=next_tool_choice_override)
-                )
-                llm_calls_count += 1
-
-            # Wait for tool execution to complete
+            # Wait for tool execution to complete first
             results = await tool_execution_task
             
             # Flatten results from batched executions
@@ -1033,6 +1011,14 @@ class Agent:
             # Process results asynchronously for better performance
             processed_messages = await self._process_results_async(flattened_results)
             messages.extend(processed_messages)
+            
+            # Start next LLM call after tool execution and result processing is complete
+            next_llm_task = None
+            if iter_idx < iters - 1:  # Not the last iteration
+                next_llm_task = asyncio.create_task(
+                    self._achat_once(messages, model, role, tool_choice_override=next_tool_choice_override)
+                )
+                llm_calls_count += 1
             # Post-write validation planning and finalize gating (mirrors sync path)
             write_success = self._contains_write_success(flattened_results)
             write_failure = self._contains_write_failure(flattened_results)
