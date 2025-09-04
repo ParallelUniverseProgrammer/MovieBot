@@ -147,6 +147,93 @@ class TMDbClient:
         data = await self._get_json("GET", f"{self._base}/search/multi", params=params)
         return self._serialize_tmdb_list(data, response_level)
 
+    async def search_movie_with_details(self, query: str, year: Optional[int] = None, 
+                                       primary_release_year: Optional[int] = None,
+                                       language: str = "en-US", page: int = 1, 
+                                       response_level: Optional[TMDbResponseLevel] = None,
+                                       max_details: int = 5) -> Dict[str, Any]:
+        """Enhanced movie search that includes detailed information for top results."""
+        # First, perform the search
+        search_result = await self.search_movie(query, year, primary_release_year, language, page, response_level)
+        
+        # If we have results and want details, fetch them for the top results
+        if search_result.get("results") and max_details > 0:
+            results = search_result["results"][:max_details]
+            detailed_results = []
+            
+            # Fetch details for each result concurrently
+            import asyncio
+            detail_tasks = []
+            for item in results:
+                if item.get("id"):
+                    # Use DETAILED level for details to get all fields, regardless of search response level
+                    detail_tasks.append(self.movie_details(item["id"], language, None, TMDbResponseLevel.DETAILED))
+                else:
+                    detail_tasks.append(asyncio.create_task(asyncio.sleep(0)))  # Placeholder for items without ID
+            
+            detail_results = await asyncio.gather(*detail_tasks, return_exceptions=True)
+            
+            # Combine search results with details
+            for i, (item, detail) in enumerate(zip(results, detail_results)):
+                if isinstance(detail, dict) and not isinstance(detail, Exception):
+                    # Merge the search result with the detailed information
+                    detailed_item = {**item, **detail}
+                    detailed_results.append(detailed_item)
+                else:
+                    # If details fetch failed, keep the original search result
+                    detailed_results.append(item)
+            
+            # Add remaining results without details
+            if len(results) < len(search_result["results"]):
+                detailed_results.extend(search_result["results"][len(results):])
+            
+            search_result["results"] = detailed_results
+        
+        return search_result
+
+    async def search_tv_with_details(self, query: str, first_air_date_year: Optional[int] = None,
+                                    language: str = "en-US", page: int = 1, 
+                                    response_level: Optional[TMDbResponseLevel] = None,
+                                    max_details: int = 5) -> Dict[str, Any]:
+        """Enhanced TV search that includes detailed information for top results."""
+        # First, perform the search
+        search_result = await self.search_tv(query, first_air_date_year, language, page, response_level)
+        
+        # If we have results and want details, fetch them for the top results
+        if search_result.get("results") and max_details > 0:
+            results = search_result["results"][:max_details]
+            detailed_results = []
+            
+            # Fetch details for each result concurrently
+            import asyncio
+            detail_tasks = []
+            for item in results:
+                if item.get("id"):
+                    # Use DETAILED level for details to get all fields, regardless of search response level
+                    detail_tasks.append(self.tv_details(item["id"], language, None, TMDbResponseLevel.DETAILED))
+                else:
+                    detail_tasks.append(asyncio.create_task(asyncio.sleep(0)))  # Placeholder for items without ID
+            
+            detail_results = await asyncio.gather(*detail_tasks, return_exceptions=True)
+            
+            # Combine search results with details
+            for i, (item, detail) in enumerate(zip(results, detail_results)):
+                if isinstance(detail, dict) and not isinstance(detail, Exception):
+                    # Merge the search result with the detailed information
+                    detailed_item = {**item, **detail}
+                    detailed_results.append(detailed_item)
+                else:
+                    # If details fetch failed, keep the original search result
+                    detailed_results.append(item)
+            
+            # Add remaining results without details
+            if len(results) < len(search_result["results"]):
+                detailed_results.extend(search_result["results"][len(results):])
+            
+            search_result["results"] = detailed_results
+        
+        return search_result
+
     async def movie_details(self, movie_id: int, language: str = "en-US",
                            append_to_response: Optional[str] = None, 
                            response_level: Optional[TMDbResponseLevel] = None) -> Dict[str, Any]:

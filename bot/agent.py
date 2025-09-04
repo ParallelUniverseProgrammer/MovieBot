@@ -58,6 +58,9 @@ class Agent:
             return "radarr"
         if n.startswith("sonarr_"):
             return "sonarr"
+        # Handle bundled tools
+        if n in ["plex_library_overview", "system_health_overview", "tmdb_discovery_suite", "radarr_activity_overview", "sonarr_activity_overview"]:
+            return "bundled"
         return "other"
 
     def _select_tool_tuning(self, name: str) -> Dict[str, int]:

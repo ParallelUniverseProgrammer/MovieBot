@@ -334,3 +334,175 @@ def make_radarr_quality_fallback(project_root: Path) -> Callable[[dict], Awaitab
     return impl
 
 
+def make_system_health_overview(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    """Bundled tool that checks system health across all services in parallel."""
+    async def impl(args: dict) -> dict:
+        import asyncio
+        from bot.workers.radarr import RadarrWorker
+        from bot.workers.sonarr import SonarrWorker
+        from bot.workers.plex import PlexWorker
+        
+        # Initialize workers
+        radarr_worker = RadarrWorker(project_root)
+        sonarr_worker = SonarrWorker(project_root)
+        plex_worker = PlexWorker(project_root)
+        
+        # Run all health checks in parallel
+        tasks = [
+            radarr_worker.system_status(),
+            radarr_worker.health(),
+            radarr_worker.disk_space(),
+            sonarr_worker.system_status(),
+            sonarr_worker.health(),
+            sonarr_worker.disk_space(),
+            plex_worker.get_library_sections(),
+        ]
+        
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Process results and handle any exceptions
+            radarr_status, radarr_health, radarr_disk, sonarr_status, sonarr_health, sonarr_disk, plex_sections = results
+            
+            # Check for exceptions and provide fallback data
+            def safe_result(result, default_name):
+                if isinstance(result, Exception):
+                    return {"error": str(result), "name": default_name, "status": "error"}
+                return result
+            
+            # Determine overall system health
+            all_healthy = True
+            error_count = 0
+            
+            for result in results:
+                if isinstance(result, Exception):
+                    all_healthy = False
+                    error_count += 1
+            
+            return {
+                "success": True,
+                "overall_health": "healthy" if all_healthy else "degraded",
+                "error_count": error_count,
+                "total_checks": len(tasks),
+                "radarr": {
+                    "system_status": safe_result(radarr_status, "radarr_system_status"),
+                    "health": safe_result(radarr_health, "radarr_health"),
+                    "disk_space": safe_result(radarr_disk, "radarr_disk_space"),
+                },
+                "sonarr": {
+                    "system_status": safe_result(sonarr_status, "sonarr_system_status"),
+                    "health": safe_result(sonarr_health, "sonarr_health"),
+                    "disk_space": safe_result(sonarr_disk, "sonarr_disk_space"),
+                },
+                "plex": {
+                    "library_sections": safe_result(plex_sections, "plex_library_sections"),
+                },
+                "summary": {
+                    "radarr_healthy": not isinstance(radarr_status, Exception) and not isinstance(radarr_health, Exception),
+                    "sonarr_healthy": not isinstance(sonarr_status, Exception) and not isinstance(sonarr_health, Exception),
+                    "plex_healthy": not isinstance(plex_sections, Exception),
+                    "total_disk_space_available": (
+                        (radarr_disk.get("free_space", 0) if not isinstance(radarr_disk, Exception) else 0) +
+                        (sonarr_disk.get("free_space", 0) if not isinstance(sonarr_disk, Exception) else 0)
+                    ) if not isinstance(radarr_disk, Exception) and not isinstance(sonarr_disk, Exception) else 0,
+                }
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to fetch system health overview: {str(e)}",
+                "overall_health": "error",
+                "error_count": len(tasks),
+                "total_checks": len(tasks),
+                "radarr": {
+                    "system_status": {"error": str(e), "name": "radarr_system_status", "status": "error"},
+                    "health": {"error": str(e), "name": "radarr_health", "status": "error"},
+                    "disk_space": {"error": str(e), "name": "radarr_disk_space", "status": "error"},
+                },
+                "sonarr": {
+                    "system_status": {"error": str(e), "name": "sonarr_system_status", "status": "error"},
+                    "health": {"error": str(e), "name": "sonarr_health", "status": "error"},
+                    "disk_space": {"error": str(e), "name": "sonarr_disk_space", "status": "error"},
+                },
+                "plex": {
+                    "library_sections": {"error": str(e), "name": "plex_library_sections", "status": "error"},
+                },
+                "summary": {
+                    "radarr_healthy": False,
+                    "sonarr_healthy": False,
+                    "plex_healthy": False,
+                    "total_disk_space_available": 0,
+                }
+            }
+
+    return impl
+
+
+def make_radarr_activity_overview(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    """Bundled tool that fetches comprehensive Radarr activity overview in parallel."""
+    worker = RadarrWorker(project_root)
+
+    async def impl(args: dict) -> dict:
+        import asyncio
+        
+        # Extract parameters
+        page = int(args.get("page", 1))
+        page_size = int(args.get("page_size", 20))
+        sort_key = str(args.get("sort_key", "releaseDate"))
+        sort_dir = str(args.get("sort_dir", "desc"))
+        start_date = args.get("start_date")
+        end_date = args.get("end_date")
+        
+        # Run all activity checks in parallel
+        tasks = [
+            worker.get_queue(),
+            worker.get_wanted(page=page, page_size=page_size, sort_key=sort_key, sort_dir=sort_dir),
+            worker.get_calendar(start_date=start_date, end_date=end_date),
+        ]
+        
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Process results and handle any exceptions
+            queue, wanted, calendar = results
+            
+            # Check for exceptions and provide fallback data
+            def safe_result(result, default_name):
+                if isinstance(result, Exception):
+                    return {"error": str(result), "data": [], "name": default_name}
+                return result
+            
+            return {
+                "success": True,
+                "queue": safe_result(queue, "queue"),
+                "wanted": safe_result(wanted, "wanted"),
+                "calendar": safe_result(calendar, "calendar"),
+                "summary": {
+                    "queue_count": len(queue.get("records", [])) if not isinstance(queue, Exception) else 0,
+                    "wanted_count": len(wanted.get("records", [])) if not isinstance(wanted, Exception) else 0,
+                    "calendar_count": len(calendar.get("records", [])) if not isinstance(calendar, Exception) else 0,
+                    "total_activity": (
+                        len(queue.get("records", [])) if not isinstance(queue, Exception) else 0 +
+                        len(wanted.get("records", [])) if not isinstance(wanted, Exception) else 0 +
+                        len(calendar.get("records", [])) if not isinstance(calendar, Exception) else 0
+                    ),
+                }
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to fetch Radarr activity overview: {str(e)}",
+                "queue": {"error": str(e), "data": [], "name": "queue"},
+                "wanted": {"error": str(e), "data": [], "name": "wanted"},
+                "calendar": {"error": str(e), "data": [], "name": "calendar"},
+                "summary": {
+                    "queue_count": 0,
+                    "wanted_count": 0,
+                    "calendar_count": 0,
+                    "total_activity": 0,
+                }
+            }
+
+    return impl
+
+

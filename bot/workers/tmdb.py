@@ -76,9 +76,16 @@ class TMDbWorker:
         language: str = "en-US",
         page: int = 1,
         response_level: Optional[str] = None,
+        include_details: bool = False,
+        max_details: int = 5,
     ) -> Dict[str, Any]:
         rl = self._coerce_response_level(response_level)
-        return await self.client.search_movie(query, year, primary_release_year, language, page, rl)
+        if include_details:
+            return await self.client.search_movie_with_details(
+                query, year, primary_release_year, language, page, rl, max_details
+            )
+        else:
+            return await self.client.search_movie(query, year, primary_release_year, language, page, rl)
 
     async def recommendations(
         self,
@@ -217,9 +224,12 @@ class TMDbWorker:
         return await self.client.similar_tv(tv_id, language, page, rl)
 
     # -------------------------- search misc --------------------------
-    async def search_tv(self, *, query: str, first_air_date_year: Optional[int] = None, language: str = "en-US", page: int = 1, response_level: Optional[str] = None) -> Dict[str, Any]:
+    async def search_tv(self, *, query: str, first_air_date_year: Optional[int] = None, language: str = "en-US", page: int = 1, response_level: Optional[str] = None, include_details: bool = False, max_details: int = 5) -> Dict[str, Any]:
         rl = self._coerce_response_level(response_level)
-        return await self.client.search_tv(query, first_air_date_year, language, page, rl)
+        if include_details:
+            return await self.client.search_tv_with_details(query, first_air_date_year, language, page, rl, max_details)
+        else:
+            return await self.client.search_tv(query, first_air_date_year, language, page, rl)
 
     async def search_multi(self, *, query: str, language: str = "en-US", page: int = 1, response_level: Optional[str] = None) -> Dict[str, Any]:
         rl = self._coerce_response_level(response_level)

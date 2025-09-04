@@ -259,3 +259,71 @@ def make_sonarr_get_episode_file_info(project_root: Path) -> Callable[[dict], Aw
     return impl
 
 
+def make_sonarr_activity_overview(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    """Bundled tool that fetches comprehensive Sonarr activity overview in parallel."""
+    worker = SonarrWorker(project_root)
+
+    async def impl(args: dict) -> dict:
+        import asyncio
+        
+        # Extract parameters
+        page = int(args.get("page", 1))
+        page_size = int(args.get("page_size", 20))
+        sort_key = str(args.get("sort_key", "airDateUtc"))
+        sort_dir = str(args.get("sort_dir", "desc"))
+        start_date = args.get("start_date")
+        end_date = args.get("end_date")
+        
+        # Run all activity checks in parallel
+        tasks = [
+            worker.get_queue(),
+            worker.get_wanted(page=page, page_size=page_size, sort_key=sort_key, sort_dir=sort_dir),
+            worker.get_calendar(start_date=start_date, end_date=end_date),
+        ]
+        
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Process results and handle any exceptions
+            queue, wanted, calendar = results
+            
+            # Check for exceptions and provide fallback data
+            def safe_result(result, default_name):
+                if isinstance(result, Exception):
+                    return {"error": str(result), "data": [], "name": default_name}
+                return result
+            
+            return {
+                "success": True,
+                "queue": safe_result(queue, "queue"),
+                "wanted": safe_result(wanted, "wanted"),
+                "calendar": safe_result(calendar, "calendar"),
+                "summary": {
+                    "queue_count": len(queue.get("records", [])) if not isinstance(queue, Exception) else 0,
+                    "wanted_count": len(wanted.get("records", [])) if not isinstance(wanted, Exception) else 0,
+                    "calendar_count": len(calendar.get("records", [])) if not isinstance(calendar, Exception) else 0,
+                    "total_activity": (
+                        len(queue.get("records", [])) if not isinstance(queue, Exception) else 0 +
+                        len(wanted.get("records", [])) if not isinstance(wanted, Exception) else 0 +
+                        len(calendar.get("records", [])) if not isinstance(calendar, Exception) else 0
+                    ),
+                }
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to fetch Sonarr activity overview: {str(e)}",
+                "queue": {"error": str(e), "data": [], "name": "queue"},
+                "wanted": {"error": str(e), "data": [], "name": "wanted"},
+                "calendar": {"error": str(e), "data": [], "name": "calendar"},
+                "summary": {
+                    "queue_count": 0,
+                    "wanted_count": 0,
+                    "calendar_count": 0,
+                    "total_activity": 0,
+                }
+            }
+
+    return impl
+
+

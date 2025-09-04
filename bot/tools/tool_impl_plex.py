@@ -162,3 +162,72 @@ def make_set_plex_rating(project_root: Path) -> Callable[[dict], Awaitable[dict]
     return impl
 
 
+def make_plex_library_overview(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    """Bundled tool that fetches comprehensive Plex library overview in parallel."""
+    worker = PlexWorker(project_root)
+
+    async def impl(args: dict) -> dict:
+        import asyncio
+        
+        # Extract common parameters
+        section_type = str(args.get("section_type", "movie")).lower()
+        limit = int(args.get("limit", 20))
+        response_level = args.get("response_level")
+        
+        # Run all library overview calls in parallel
+        tasks = [
+            worker.get_library_sections(),
+            worker.get_recently_added(section_type=section_type, limit=limit, response_level=response_level),
+            worker.get_on_deck(limit=limit, response_level=response_level),
+            worker.get_continue_watching(limit=limit, response_level=response_level),
+            worker.get_unwatched(section_type=section_type, limit=limit, response_level=response_level),
+        ]
+        
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Process results and handle any exceptions
+            library_sections, recently_added, on_deck, continue_watching, unwatched = results
+            
+            # Check for exceptions and provide fallback data
+            def safe_result(result, default_name):
+                if isinstance(result, Exception):
+                    return {"error": str(result), "data": [], "name": default_name}
+                return result
+            
+            return {
+                "success": True,
+                "library_sections": safe_result(library_sections, "library_sections"),
+                "recently_added": safe_result(recently_added, "recently_added"),
+                "on_deck": safe_result(on_deck, "on_deck"),
+                "continue_watching": safe_result(continue_watching, "continue_watching"),
+                "unwatched": safe_result(unwatched, "unwatched"),
+                "summary": {
+                    "total_sections": len(library_sections.get("sections", [])) if not isinstance(library_sections, Exception) else 0,
+                    "recently_added_count": len(recently_added.get("items", [])) if not isinstance(recently_added, Exception) else 0,
+                    "on_deck_count": len(on_deck.get("items", [])) if not isinstance(on_deck, Exception) else 0,
+                    "continue_watching_count": len(continue_watching.get("items", [])) if not isinstance(continue_watching, Exception) else 0,
+                    "unwatched_count": len(unwatched.get("items", [])) if not isinstance(unwatched, Exception) else 0,
+                }
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to fetch library overview: {str(e)}",
+                "library_sections": {"error": str(e), "data": [], "name": "library_sections"},
+                "recently_added": {"error": str(e), "data": [], "name": "recently_added"},
+                "on_deck": {"error": str(e), "data": [], "name": "on_deck"},
+                "continue_watching": {"error": str(e), "data": [], "name": "continue_watching"},
+                "unwatched": {"error": str(e), "data": [], "name": "unwatched"},
+                "summary": {
+                    "total_sections": 0,
+                    "recently_added_count": 0,
+                    "on_deck_count": 0,
+                    "continue_watching_count": 0,
+                    "unwatched_count": 0,
+                }
+            }
+
+    return impl
+
+

@@ -13,8 +13,8 @@ llm:
     priority: [openai, openrouter]
     openai:
       chat:
-        model: gpt-4.1-mini
-        #easoningEffort: minimal
+        model: gpt-5-nano
+        reasoningEffort: minimal
         params:
           tool_choice: auto
       smart:
