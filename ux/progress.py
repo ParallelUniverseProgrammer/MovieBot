@@ -138,6 +138,13 @@ class AsyncProgressBroadcaster:
             task.cancel()
         for task in list(self._typing_tasks.values()):
             task.cancel()
+        # Close all sinks that support it
+        for sink in self._sinks:
+            if hasattr(sink, 'aclose'):
+                try:
+                    await sink.aclose()
+                except Exception:
+                    pass
         await asyncio.sleep(0)
 
 

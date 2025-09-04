@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import discord
 from discord import app_commands
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from config.loader import load_settings
 from integrations.plex_client import PlexClient
+from ..discord_embeds import MovieBotEmbeds, ProgressIndicator
 
 
 def register(client: discord.Client) -> None:
@@ -31,39 +32,104 @@ def register(client: discord.Client) -> None:
         if detail not in ["minimal", "compact", "standard", "detailed"]:
             detail = "compact"
         
+        # Create progress indicator
+        progress_embed = MovieBotEmbeds.create_progress_embed(
+            "Searching Plex Library",
+            f"Looking for '{query or 'recent content'}'..." if query else "Getting recently added content...",
+            progress=0.1,
+            status="working"
+        )
+        await interaction.followup.send(embed=progress_embed, ephemeral=True)
+        
         try:
             settings = load_settings(client.project_root)
             plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
             
+            # Update progress
+            progress_embed = MovieBotEmbeds.create_progress_embed(
+                "Searching Plex Library",
+                "Connecting to Plex server...",
+                progress=0.3,
+                status="working"
+            )
+            await interaction.edit_original_response(embed=progress_embed)
+            
             if query:
                 results = plex.search_movies(query)
                 if not results:
-                    await interaction.followup.send(f"No results found for '{query}'", ephemeral=True)
+                    error_embed = MovieBotEmbeds.create_error_embed(
+                        "No Results Found",
+                        f"No results found for '{query}' in your Plex library"
+                    )
+                    await interaction.edit_original_response(embed=error_embed)
                     return
                 
-                # Format results based on detail level
-                if detail == "minimal":
-                    lines = [f"• {m.title} ({getattr(m, 'year', '?')})" for m in results[:limit]]
-                elif detail == "compact":
-                    lines = [f"• {m.title} ({getattr(m, 'year', '?')}) — ID: {getattr(m, 'ratingKey', 'N/A')}" for m in results[:limit]]
-                else:
-                    lines = []
-                    for m in results[:limit]:
-                        rating = getattr(m, 'rating', 'N/A')
-                        duration = getattr(m, 'duration', 'N/A')
-                        lines.append(f"• {m.title} ({getattr(m, 'year', '?')}) — Rating: {rating}, Duration: {duration}min, ID: {getattr(m, 'ratingKey', 'N/A')}")
+                # Update progress
+                progress_embed = MovieBotEmbeds.create_progress_embed(
+                    "Searching Plex Library",
+                    "Formatting search results...",
+                    progress=0.7,
+                    status="working"
+                )
+                await interaction.edit_original_response(embed=progress_embed)
                 
-                text = f"**Results for '{query}':**\n" + "\n".join(lines)
+                # Create embeds for results
+                embeds = []
+                for media in results[:5]:  # Limit to 5 for embed limits
+                    embed = MovieBotEmbeds.create_plex_media_embed(media, "movie")
+                    embeds.append(embed)
+                
+                # Send success status
+                success_embed = MovieBotEmbeds.create_progress_embed(
+                    "Search Complete",
+                    f"Found {len(results)} results for '{query}'",
+                    progress=1.0,
+                    status="success"
+                )
+                await interaction.edit_original_response(embed=success_embed)
+                
+                # Send individual result embeds
+                for embed in embeds:
+                    await interaction.followup.send(embed=embed, ephemeral=True)
             else:
                 # Show recent additions
                 results = plex.get_recently_added()
-                lines = [f"• {m.title} ({getattr(m, 'year', '?')}) — Added recently" for m in results[:limit]]
-                text = f"**Recently Added (showing {min(len(results), limit)}):**\n" + "\n".join(lines)
-            
-            await interaction.followup.send(text[:1900], ephemeral=True)
+                
+                # Update progress
+                progress_embed = MovieBotEmbeds.create_progress_embed(
+                    "Searching Plex Library",
+                    "Formatting recent additions...",
+                    progress=0.7,
+                    status="working"
+                )
+                await interaction.edit_original_response(embed=progress_embed)
+                
+                # Create embeds for recent additions
+                embeds = []
+                for media in results[:5]:  # Limit to 5 for embed limits
+                    embed = MovieBotEmbeds.create_plex_media_embed(media, "movie")
+                    embed.title = f"🆕 {embed.title}"  # Add new indicator
+                    embeds.append(embed)
+                
+                # Send success status
+                success_embed = MovieBotEmbeds.create_progress_embed(
+                    "Recent Additions Ready",
+                    f"Found {len(results)} recently added items",
+                    progress=1.0,
+                    status="success"
+                )
+                await interaction.edit_original_response(embed=success_embed)
+                
+                # Send individual result embeds
+                for embed in embeds:
+                    await interaction.followup.send(embed=embed, ephemeral=True)
             
         except Exception as e:
-            await interaction.followup.send(f"Search failed: {str(e)}", ephemeral=True)
+            error_embed = MovieBotEmbeds.create_error_embed(
+                "Search Failed",
+                f"An error occurred while searching Plex: {str(e)}"
+            )
+            await interaction.edit_original_response(embed=error_embed)
 
     @media_group.command(name="rate", description="Rate a movie or show (1-10)")
     @app_commands.describe(
@@ -74,17 +140,59 @@ def register(client: discord.Client) -> None:
         await interaction.response.defer(ephemeral=True)
         
         if rating < 1 or rating > 10:
-            await interaction.followup.send("Rating must be between 1 and 10", ephemeral=True)
+            error_embed = MovieBotEmbeds.create_error_embed(
+                "Invalid Rating",
+                "Rating must be between 1 and 10"
+            )
+            await interaction.followup.send(embed=error_embed, ephemeral=True)
             return
+        
+        # Create progress indicator
+        progress_embed = MovieBotEmbeds.create_progress_embed(
+            "Rating Media",
+            f"Setting rating to {rating}/10...",
+            progress=0.1,
+            status="working"
+        )
+        await interaction.followup.send(embed=progress_embed, ephemeral=True)
         
         try:
             settings = load_settings(client.project_root)
             plex = PlexClient(settings.plex_base_url, settings.plex_token or "")
+            
+            # Update progress
+            progress_embed = MovieBotEmbeds.create_progress_embed(
+                "Rating Media",
+                "Connecting to Plex server...",
+                progress=0.3,
+                status="working"
+            )
+            await interaction.edit_original_response(embed=progress_embed)
+            
             plex.set_rating(rating_key, rating)
-            await interaction.followup.send(f"✅ Rated item {rating_key} with {rating}/10", ephemeral=True)
+            
+            # Update progress
+            progress_embed = MovieBotEmbeds.create_progress_embed(
+                "Rating Media",
+                "Rating saved successfully!",
+                progress=1.0,
+                status="success"
+            )
+            await interaction.edit_original_response(embed=progress_embed)
+            
+            # Send success message
+            success_embed = MovieBotEmbeds.create_success_embed(
+                "Rating Saved",
+                f"Successfully rated item {rating_key} with {rating}/10 ⭐"
+            )
+            await interaction.followup.send(embed=success_embed, ephemeral=True)
             
         except Exception as e:
-            await interaction.followup.send(f"Failed to set rating: {str(e)}", ephemeral=True)
+            error_embed = MovieBotEmbeds.create_error_embed(
+                "Rating Failed",
+                f"Failed to set rating: {str(e)}"
+            )
+            await interaction.edit_original_response(embed=error_embed)
 
     @media_group.command(name="recent", description="Show recently added content")
     @app_commands.describe(

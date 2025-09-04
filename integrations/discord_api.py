@@ -10,6 +10,7 @@ class DiscordAPISink:
     Capabilities:
     - Send lightweight progress messages
     - Emit typing indicators via REST (bots only)
+    - Connection pooling for efficiency
 
     Falls back to no-op if aiohttp is not installed.
     """
@@ -19,12 +20,29 @@ class DiscordAPISink:
         self._channel_id = channel_id
         self._webhook_url = webhook_url
         self._log = logging.getLogger("moviebot.discord")
+        self._session: Optional[Any] = None
         try:
             import aiohttp  # noqa: F401
             self._aiohttp_available = True
         except Exception:
             self._aiohttp_available = False
             self._log.warning("aiohttp not installed; Discord sink disabled")
+
+    async def _get_session(self) -> Any:
+        """Get or create aiohttp session with connection pooling."""
+        if not self._aiohttp_available:
+            return None
+        if self._session is None or self._session.closed:
+            import aiohttp
+            connector = aiohttp.TCPConnector(limit=10, limit_per_host=5)
+            timeout = aiohttp.ClientTimeout(total=10)
+            self._session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+        return self._session
+
+    async def aclose(self) -> None:
+        """Close the aiohttp session."""
+        if self._session and not self._session.closed:
+            await self._session.close()
 
     async def emit(self, event_type: str, data: Any) -> None:
         if not self._aiohttp_available:
@@ -55,24 +73,33 @@ class DiscordAPISink:
     async def _send_message(self, content: str) -> None:
         if not self._aiohttp_available:
             return
-        import aiohttp
-        if self._webhook_url:
-            async with aiohttp.ClientSession() as session:
-                await session.post(self._webhook_url, json={"content": content})
+        session = await self._get_session()
+        if not session:
             return
-        # Bot token + channel message
-        url = f"https://discord.com/api/v10/channels/{self._channel_id}/messages"
-        headers = {"Authorization": f"Bot {self._token}"}
-        async with aiohttp.ClientSession() as session:
-            await session.post(url, headers=headers, json={"content": content})
+        try:
+            if self._webhook_url:
+                await session.post(self._webhook_url, json={"content": content})
+            else:
+                # Bot token + channel message
+                url = f"https://discord.com/api/v10/channels/{self._channel_id}/messages"
+                headers = {"Authorization": f"Bot {self._token}"}
+                await session.post(url, headers=headers, json={"content": content})
+        except Exception:
+            # Silent failure for UX updates
+            pass
 
     async def _typing_once(self) -> None:
         if not self._aiohttp_available:
             return
-        import aiohttp
-        url = f"https://discord.com/api/v10/channels/{self._channel_id}/typing"
-        headers = {"Authorization": f"Bot {self._token}"}
-        async with aiohttp.ClientSession() as session:
+        session = await self._get_session()
+        if not session:
+            return
+        try:
+            url = f"https://discord.com/api/v10/channels/{self._channel_id}/typing"
+            headers = {"Authorization": f"Bot {self._token}"}
             await session.post(url, headers=headers)
+        except Exception:
+            # Silent failure for UX updates
+            pass
 
 

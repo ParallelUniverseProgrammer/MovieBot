@@ -8,6 +8,7 @@ import re
 import logging
 import random
 import time
+from datetime import datetime
 
 import discord
 from discord import app_commands
@@ -23,6 +24,7 @@ from .commands import (
 from .conversation import CONVERSATIONS
 from .agent import Agent
 from .agent_prompt import build_minimal_system_prompt
+from .discord_embeds import MovieBotEmbeds, ProgressIndicator
 
 
 def ephemeral_embed(title: str, description: str) -> discord.Embed:
@@ -355,14 +357,16 @@ class MovieBotClient(discord.Client):
                 if progress_type == "tool":
                     mapped_type = "tool_start"
                 # Ensure thread-safety if ever called off-loop
-                loop = asyncio.get_running_loop()
-                loop.call_soon_threadsafe(progress_events.put_nowait, {"type": mapped_type, "details": details})
-            except RuntimeError:
-                # Fallback if no running loop (unlikely here)
                 try:
-                    progress_events.put_nowait({"type": progress_type, "details": details})
-                except Exception:
+                    loop = asyncio.get_running_loop()
+                    loop.call_soon_threadsafe(progress_events.put_nowait, {"type": mapped_type, "details": details})
+                except RuntimeError:
+                    # No running loop - this shouldn't happen in Discord context
+                    # but if it does, we'll skip the update rather than risk race conditions
                     pass
+            except Exception:
+                # Silent failure for progress updates
+                pass
         
         agent = Agent(api_key=api_key, project_root=self.project_root, provider=provider, progress_callback=progress_callback)  # type: ignore[arg-type]
         
@@ -481,7 +485,15 @@ class MovieBotClient(discord.Client):
                         initial = _get_clever_progress_message(iteration_counter,  # type: ignore[attr-defined]
                                                                evt.get("details"),
                                                                evt.get("type"))
-                        progress_message = await message.channel.send(initial, silent=True)
+                        
+                        # Create rich progress embed
+                        progress_embed = MovieBotEmbeds.create_progress_embed(
+                            "MovieBot Working",
+                            initial,
+                            progress=min(iteration_counter * 0.1, 0.9),
+                            status="working"
+                        )
+                        progress_message = await message.channel.send(embed=progress_embed, silent=True)
                         last_rendered = initial
 
                         # Consume subsequent events until done
@@ -511,7 +523,14 @@ class MovieBotClient(discord.Client):
                             iteration_counter += 1
                             new_message = _get_clever_progress_message(iteration_counter, tool_name, ptype)  # type: ignore[attr-defined]
                             if progress_message and new_message != last_rendered:
-                                await progress_message.edit(content=new_message)
+                                # Update progress embed
+                                updated_embed = MovieBotEmbeds.create_progress_embed(
+                                    "MovieBot Working",
+                                    new_message,
+                                    progress=min(iteration_counter * 0.1, 0.9),
+                                    status="working"
+                                )
+                                await progress_message.edit(embed=updated_embed)
                                 last_rendered = new_message
                                 last_edit_ms = now_ms
                     except Exception as e:
@@ -548,6 +567,11 @@ class MovieBotClient(discord.Client):
                     done.set()
                     if progress_update_task:
                         progress_update_task.cancel()
+                        # Wait for task to complete cancellation to prevent memory leaks
+                        try:
+                            await asyncio.wait_for(progress_update_task, timeout=1.0)
+                        except (asyncio.CancelledError, asyncio.TimeoutError):
+                            pass
                         
             # Extract text from response for both SDK objects and plain dicts
             try:
@@ -570,10 +594,31 @@ class MovieBotClient(discord.Client):
             if progress_update_task:
                 progress_update_task.cancel()
         
-        # Send final reply first, then delete the progress message
+        # Send final reply with rich embed
         CONVERSATIONS.add_assistant(conv_id, text)
         log.info("assistant reply", extra={"channel_id": conv_id, "content_preview": text[:120]})
-        await message.reply(text[:1900], mention_author=False)
+        
+        # Create a rich embed for the response
+        if used_quick_path:
+            # Quick path responses get a simple embed
+            response_embed = discord.Embed(
+                title="MovieBot Response",
+                description=text[:1900],
+                color=MovieBotEmbeds.COLORS['info'],
+                timestamp=datetime.utcnow()
+            )
+            response_embed.set_footer(text="Quick Response", icon_url="https://cdn.discordapp.com/emojis/1234567890.png")
+        else:
+            # Agent responses get a more detailed embed
+            response_embed = discord.Embed(
+                title="🎬 MovieBot Analysis",
+                description=text[:1900],
+                color=MovieBotEmbeds.COLORS['plex'],
+                timestamp=datetime.utcnow()
+            )
+            response_embed.set_footer(text="AI-Powered Media Assistant", icon_url="https://cdn.discordapp.com/emojis/1234567890.png")
+        
+        await message.reply(embed=response_embed, mention_author=False)
 
         # Delete the progress message if it exists
         if progress_message:
