@@ -19,6 +19,17 @@ class PlexSearchWorker:
     def __init__(self, project_root: Path) -> None:
         self.project_root = project_root
         self.settings = load_settings(project_root)
+        # Reuse a single PlexClient instance for better performance
+        self._plex_client: Optional[PlexClient] = None
+
+    def _get_plex_client(self) -> PlexClient:
+        """Get or create a reusable PlexClient instance."""
+        if self._plex_client is None:
+            self._plex_client = PlexClient(
+                self.settings.plex_base_url, 
+                self.settings.plex_token or ""
+            )
+        return self._plex_client
 
     async def search(
         self,
@@ -55,7 +66,7 @@ class PlexSearchWorker:
         if isinstance(response_level, str) and response_level.strip():
             resp_level = ResponseLevel(response_level.strip())
 
-        plex = PlexClient(self.settings.plex_base_url, self.settings.plex_token or "")
+        plex = self._get_plex_client()
 
         results: List[Dict[str, Any]] = await asyncio.to_thread(
             plex.search_movies_filtered,

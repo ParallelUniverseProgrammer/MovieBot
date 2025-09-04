@@ -134,8 +134,9 @@ class PlexClient:
 
     # Advanced, server-side filtered movie search
     def _map_sort_key(self, sort_by: Optional[str]) -> str:
+        """Map user-friendly sort fields to Plex API sort fields."""
         mapping = {
-            "title": "titleSort",
+            "title": "titleSort",  # Plex API uses titleSort, not title
             "year": "year",
             "rating": "rating",
             "content_rating": "contentRating",
@@ -144,6 +145,7 @@ class PlexClient:
             "addedAt": "addedAt",
             "lastViewed": "lastViewedAt",
             "lastViewedAt": "lastViewedAt",
+            "titleSort": "titleSort",  # Direct mapping for API compliance
         }
         return mapping.get((sort_by or "title").strip(), "titleSort")
 
@@ -196,11 +198,60 @@ class PlexClient:
         direction = "asc" if str(sort_order or "asc").lower() == "asc" else "desc"
         sort_param = f"{sort_key}:{direction}"
 
-        # Normalize lists
+        # Normalize and validate list filters
         genres = [g for g in (genres or []) if str(g).strip()]
         actors = [a for a in (actors or []) if str(a).strip()]
         directors = [d for d in (directors or []) if str(d).strip()]
 
+        # Try to use Plex's native filtering first (most efficient)
+        try:
+            # Build comprehensive search parameters
+            search_kwargs = dict(base_kwargs)
+            search_kwargs.update({
+                "maxresults": limit,
+                "sort": sort_param
+            })
+            
+            # Add list filters if they exist (Plex supports OR within categories)
+            if genres:
+                search_kwargs["genre"] = genres[0]  # Plex API limitation: single genre per call
+            if actors:
+                search_kwargs["actor"] = actors[0]  # Plex API limitation: single actor per call
+            if directors:
+                search_kwargs["director"] = directors[0]  # Plex API limitation: single director per call
+            
+            items = section.search(**search_kwargs)
+            
+        except Exception:
+            # Fallback to multiple calls with intersection (less efficient but more reliable)
+            try:
+                items = self._search_with_intersection(
+                    section, base_kwargs, genres, actors, directors, 
+                    sort_param, limit, sort_key, direction
+                )
+            except Exception:
+                # Final fallback: minimal search
+                try:
+                    fallback_kwargs = {k: v for k, v in base_kwargs.items() if k == "title"}
+                    items = section.search(maxresults=limit, sort=sort_param, **fallback_kwargs)
+                except Exception:
+                    items = []
+
+        return self._serialize_items(items, response_level)
+
+    def _search_with_intersection(
+        self, 
+        section: Any, 
+        base_kwargs: Dict[str, Any], 
+        genres: List[str], 
+        actors: List[str], 
+        directors: List[str],
+        sort_param: str,
+        limit: int,
+        sort_key: str,
+        direction: str
+    ) -> List[Any]:
+        """Fallback method for complex filtering using intersection logic."""
         list_filters: List[tuple[str, List[str]]] = []
         if genres:
             list_filters.append(("genre", genres))
@@ -209,55 +260,46 @@ class PlexClient:
         if directors:
             list_filters.append(("director", directors))
 
-        items: List[Any] = []
-        # If there are no list-type filters, do a single filtered search
         if not list_filters:
-            try:
-                items = section.search(maxresults=limit, sort=sort_param, **base_kwargs)
-            except Exception:
-                # Fallback: minimal search by title only
-                fallback_kwargs = {k: v for k, v in base_kwargs.items() if k == "title"}
-                try:
-                    items = section.search(maxresults=limit, sort=sort_param, **fallback_kwargs)
-                except Exception:
-                    items = []
-        else:
-            # Perform OR within each category and AND across categories via set intersection
-            current_ids: Optional[Set[Any]] = None
-            id_to_item: Dict[Any, Any] = {}
-            for key, values in list_filters:
-                category_union: Set[Any] = set()
-                category_map: Dict[Any, Any] = {}
-                for val in values:
-                    try:
-                        res = section.search(maxresults=limit, sort=sort_param, **base_kwargs, **{key: val})
-                    except Exception:
-                        res = []
-                    for it in res:
-                        rk = getattr(it, "ratingKey", None)
-                        if rk is not None:
-                            category_union.add(rk)
-                            category_map[rk] = it
-                if current_ids is None:
-                    current_ids = category_union
-                else:
-                    current_ids = current_ids.intersection(category_union)
-                id_to_item.update(category_map)
-                if not current_ids:
-                    break
+            return section.search(maxresults=limit, sort=sort_param, **base_kwargs)
 
-            if current_ids:
-                items = [id_to_item[rk] for rk in current_ids if rk in id_to_item]
-                # Ensure deterministic ordering client-side if needed
+        # Perform OR within each category and AND across categories via set intersection
+        current_ids: Optional[Set[Any]] = None
+        id_to_item: Dict[Any, Any] = {}
+        
+        for key, values in list_filters:
+            category_union: Set[Any] = set()
+            category_map: Dict[Any, Any] = {}
+            
+            for val in values:
                 try:
-                    items.sort(key=lambda x: getattr(x, sort_key, getattr(x, "title", "")), reverse=(direction == "desc"))
+                    res = section.search(maxresults=limit, sort=sort_param, **base_kwargs, **{key: val})
                 except Exception:
-                    items.sort(key=lambda x: getattr(x, "title", ""), reverse=(direction == "desc"))
-                items = items[:limit]
+                    res = []
+                for it in res:
+                    rk = getattr(it, "ratingKey", None)
+                    if rk is not None:
+                        category_union.add(rk)
+                        category_map[rk] = it
+            
+            if current_ids is None:
+                current_ids = category_union
             else:
-                items = []
+                current_ids = current_ids.intersection(category_union)
+            id_to_item.update(category_map)
+            if not current_ids:
+                break
 
-        return self._serialize_items(items, response_level)
+        if current_ids:
+            items = [id_to_item[rk] for rk in current_ids if rk in id_to_item]
+            # Ensure deterministic ordering client-side if needed
+            try:
+                items.sort(key=lambda x: getattr(x, sort_key, getattr(x, "title", "")), reverse=(direction == "desc"))
+            except Exception:
+                items.sort(key=lambda x: getattr(x, "title", ""), reverse=(direction == "desc"))
+            return items[:limit]
+        else:
+            return []
 
     # Convenience methods for minimal context usage
     def get_minimal_library_overview(self) -> Dict[str, Any]:
@@ -348,18 +390,33 @@ class PlexClient:
             return []
 
     def get_unwatched(self, section_type: str = "movie", limit: int = 20, response_level: Optional[ResponseLevel] = None) -> List[Dict[str, Any]]:
-        """Get unwatched items from specified library."""
+        """Get unwatched items from specified library with optimized performance."""
         try:
             # Tests expect capitalized type-based section names
             section_name = "Movies" if section_type.lower() == "movie" else "TV Shows" if section_type.lower() == "show" else section_type.title()
             section = self.plex.library.section(section_name)
-            # Prefer native unwatched API with maxresults
-            if hasattr(section, "unwatched") and callable(section.unwatched):
-                unwatched_items = section.unwatched(maxresults=limit)
-            else:
-                all_items = section.all()
-                unwatched_items = [item for item in all_items if not getattr(item, 'isWatched', False)][:limit]
-            return self._serialize_items(unwatched_items, response_level)
+            
+            # Use the most efficient approach: search with unwatched filter
+            # This is the native Plex API way to get unwatched items
+            try:
+                unwatched_items = section.search(unwatched=True, maxresults=limit)
+                return self._serialize_items(unwatched_items, response_level)
+            except Exception:
+                # Fallback to client-side filtering if search fails
+                try:
+                    # Use recentlyAdded as it's often faster than all() and contains unwatched items
+                    all_items = section.recentlyAdded(maxresults=limit * 2)  # Get more to filter
+                    unwatched_items = [item for item in all_items if not getattr(item, 'isWatched', False)][:limit]
+                    
+                    # If still not enough, fall back to all() but with a reasonable limit
+                    if len(unwatched_items) < limit:
+                        all_items = section.all(maxresults=limit * 3)
+                        additional = [item for item in all_items if not getattr(item, 'isWatched', False) and item not in unwatched_items]
+                        unwatched_items.extend(additional[:limit - len(unwatched_items)])
+                    
+                    return self._serialize_items(unwatched_items, response_level)
+                except Exception:
+                    return []
         except Exception:
             return []
 

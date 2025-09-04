@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from config.loader import load_settings, load_runtime_config
 from integrations.radarr_client import RadarrClient
+from integrations.ttl_cache import shared_cache
 
 
 class RadarrWorker:
@@ -72,9 +73,24 @@ class RadarrWorker:
         
         return data
 
-    async def get_movies(self, *, movie_id: Optional[int] = None) -> Dict[str, Any]:
+    async def get_movies(self, *, movie_id: Optional[int] = None, bypass_cache: bool = False) -> Dict[str, Any]:
+        """Get movies with intelligent caching for better performance."""
+        # Create cache key based on parameters
+        cache_key = f"radarr:movies:{movie_id if movie_id else 'all'}"
+        
+        if not bypass_cache:
+            cached = shared_cache.get(cache_key)
+            if cached is not None:
+                return cached
+        
         data = await self.client.get_movies(movie_id)
-        return {"movies": data}
+        result = {"movies": data}
+        
+        # Cache for 2 minutes for all movies, 5 minutes for specific movie
+        ttl = 300 if movie_id else 120
+        shared_cache.set(cache_key, result, ttl)
+        
+        return result
 
     async def update_movie(self, *, movie_id: int, update_data: Dict[str, Any]) -> Dict[str, Any]:
         data = await self.client.update_movie(int(movie_id), **(update_data or {}))

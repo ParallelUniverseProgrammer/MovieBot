@@ -122,9 +122,16 @@ class PlexWorker:
             cached = self._get_cache(key)
             if cached is not None:
                 return cached
-        items = await self._to_thread(self.plex.get_unwatched, section_type, limit, rl)
+        
+        # Use coalescing to prevent duplicate requests
+        async def _fetch_unwatched():
+            return await self._to_thread(self.plex.get_unwatched, section_type, limit, rl)
+        
+        items = await self._coalesce(f"unwatched:{key}", _fetch_unwatched)
         out = {"items": items, "section_type": section_type, "limit": limit, "total_found": len(items), "response_level": rl.value if rl else "compact"}
-        self._set_cache(key, out, ttl=30)
+        
+        # Increase cache TTL for unwatched items as they change less frequently
+        self._set_cache(key, out, ttl=120)  # 2 minutes instead of 30 seconds
         return out
 
     async def get_collections(self, *, section_type: str, limit: int, response_level: Optional[str], bypass_cache: bool = False) -> Dict[str, Any]:
@@ -215,6 +222,43 @@ class PlexWorker:
         out = {"history": history, "rating_key": int(rating_key), "limit": int(limit), "total_found": len(history)}
         self._set_cache(key, out, ttl=60)
         return out
+
+    # -------------------- batch operations --------------------
+    async def get_library_overview(self, *, response_level: Optional[str] = None, bypass_cache: bool = False) -> Dict[str, Any]:
+        """Get a comprehensive library overview with all common data in one optimized call."""
+        rl = self._resp_level(response_level)
+        key = self._cache_key("library_overview", rl.value if rl else None)
+        if not bypass_cache:
+            cached = self._get_cache(key)
+            if cached is not None:
+                return cached
+        
+        # Fetch multiple data types in parallel for better performance
+        async def _fetch_overview():
+            tasks = [
+                self._to_thread(self.plex.get_library_sections),
+                self._to_thread(self.plex.get_recently_added, "movie", 10, rl),
+                self._to_thread(self.plex.get_recently_added, "show", 10, rl),
+                self._to_thread(self.plex.get_unwatched, "movie", 10, rl),
+                self._to_thread(self.plex.get_unwatched, "show", 10, rl),
+                self._to_thread(self.plex.get_on_deck, 10, rl),
+            ]
+            
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            return {
+                "sections": results[0] if not isinstance(results[0], Exception) else {},
+                "recent_movies": results[1] if not isinstance(results[1], Exception) else [],
+                "recent_shows": results[2] if not isinstance(results[2], Exception) else [],
+                "unwatched_movies": results[3] if not isinstance(results[3], Exception) else [],
+                "unwatched_shows": results[4] if not isinstance(results[4], Exception) else [],
+                "on_deck": results[5] if not isinstance(results[5], Exception) else [],
+                "response_level": rl.value if rl else "compact"
+            }
+        
+        overview = await self._coalesce(f"overview:{key}", _fetch_overview)
+        self._set_cache(key, overview, ttl=60)  # 1 minute cache for overview
+        return overview
 
     # -------------------- 4K/HDR via HTTP --------------------
     def _parse_videos(self, xml_text: str, response_level: Optional[ResponseLevel]) -> List[Dict[str, Any]]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import asyncio
 
 import httpx
 
@@ -9,10 +10,43 @@ class RadarrClient:
     def __init__(self, base_url: str, api_key: str):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
-        # Avoid binding an AsyncClient to a specific event loop; create per-call clients instead
-        self._client = None
+        # Use a persistent client with connection pooling for better performance
+        self._client: Optional[httpx.AsyncClient] = None
+        self._client_lock = asyncio.Lock()
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Get or create a persistent HTTP client with connection pooling."""
+        if self._client is None or self._client.is_closed:
+            async with self._client_lock:
+                if self._client is None or self._client.is_closed:
+                    # Configure connection pooling and timeouts for better performance
+                    limits = httpx.Limits(
+                        max_keepalive_connections=10,
+                        max_connections=20,
+                        keepalive_expiry=30.0
+                    )
+                    timeout = httpx.Timeout(20.0, connect=5.0, read=15.0)
+                    # Try to enable HTTP/2 if available, fallback to HTTP/1.1
+                    try:
+                        self._client = httpx.AsyncClient(
+                            base_url=self.base_url,
+                            headers={"X-Api-Key": self.api_key},
+                            timeout=timeout,
+                            limits=limits,
+                            http2=True  # Enable HTTP/2 for better multiplexing
+                        )
+                    except ImportError:
+                        # Fallback to HTTP/1.1 if h2 package is not available
+                        self._client = httpx.AsyncClient(
+                            base_url=self.base_url,
+                            headers={"X-Api-Key": self.api_key},
+                            timeout=timeout,
+                            limits=limits
+                        )
+        return self._client
 
     def _new_client(self) -> httpx.AsyncClient:
+        """Legacy method for backward compatibility - prefer _get_client() for better performance."""
         return httpx.AsyncClient(base_url=self.base_url, headers={"X-Api-Key": self.api_key}, timeout=20.0)
 
     def _is_movie_exists_error(self, error: httpx.HTTPStatusError) -> bool:
@@ -77,14 +111,16 @@ class RadarrClient:
             }
 
     async def close(self) -> None:
-        # No-op when using per-call clients. Kept for compatibility with existing call sites.
+        """Close the persistent HTTP client and clean up resources."""
         try:
-            if self._client is not None:
+            if self._client is not None and not self._client.is_closed:
                 await self._client.aclose()
         except RuntimeError as e:
             # Gracefully ignore event loop closure issues on teardown
             if "Event loop is closed" not in str(e):
                 raise
+        finally:
+            self._client = None
 
     # System & Status
     async def system_status(self) -> Dict[str, Any]:
@@ -120,13 +156,14 @@ class RadarrClient:
 
     # Movie Management
     async def get_movies(self, movie_id: Optional[int] = None) -> List[Dict[str, Any]]:
-        async with self._new_client() as client:
-            if movie_id:
-                r = await client.get(f"/api/v3/movie/{movie_id}")
-            else:
-                r = await client.get("/api/v3/movie")
-            r.raise_for_status()
-            return r.json()
+        """Get movies with optimized connection pooling and caching."""
+        client = await self._get_client()
+        if movie_id:
+            r = await client.get(f"/api/v3/movie/{movie_id}")
+        else:
+            r = await client.get("/api/v3/movie")
+        r.raise_for_status()
+        return r.json()
 
     async def lookup(self, term: str) -> List[Dict[str, Any]]:
         async with self._new_client() as client:
