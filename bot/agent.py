@@ -994,9 +994,7 @@ class Agent:
                     return await run_one_or_batch(tc_or_group)
 
             # PIPELINED EXECUTION: Start tool execution and next LLM call concurrently
-            tool_execution_task = asyncio.create_task(
-                asyncio.gather(*[sem_wrapped(tc_or_group) for tc_or_group in tool_groups])
-            )
+            tool_execution_task = asyncio.gather(*[sem_wrapped(tc_or_group) for tc_or_group in tool_groups])
             
             # Start next LLM call immediately if not finalizing
             next_llm_task = None
