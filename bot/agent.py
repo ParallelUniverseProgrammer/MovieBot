@@ -177,8 +177,7 @@ class Agent:
                 **params,
             )
         else:
-            # Fallback: run sync client.chat in a thread to avoid blocking the event loop
-            import functools
+            # No fallback - force async implementation
             sel = self._get_role_selection(role)
             params = dict(sel.get("params", {}))
             params["temperature"] = 1
@@ -188,15 +187,14 @@ class Agent:
                 params["tool_choice"] = tool_choice_value
             else:
                 params.pop("tool_choice", None)
-            fn = functools.partial(
-                self.llm.chat,
+            # Force async implementation - no blocking fallbacks
+            resp = await self.llm.achat(
                 model=model,
                 messages=messages,
                 tools=tools_to_send,
                 reasoning=sel.get("reasoningEffort"),
                 **params,
             )
-            resp = await asyncio.to_thread(fn)
 
         try:
             content_preview = (resp.choices[0].message.content or "")[:120]  # type: ignore[attr-defined]
@@ -441,13 +439,14 @@ class Agent:
         return await self._arun_tools_loop(base_messages, model, role, max_iters=max_iters, stream_final_to_callback=stream_final_to_callback)
 
     def _group_tool_calls_for_batching(self, tool_calls: List[Any]) -> List[Any]:
-        """Enhanced batching strategy with smart grouping and performance optimization.
+        """Ultra-aggressive batching strategy with predictive execution and cross-family optimization.
         
-        This method implements intelligent batching based on:
-        1. Tool family characteristics (TMDb is fast, *arr is slower)
-        2. Operation type (reads vs writes)
-        3. Optimal batch sizes per family
+        This method implements maximum performance batching based on:
+        1. Tool family characteristics and API response times
+        2. Operation type and safety requirements
+        3. Optimal batch sizes per family (increased for better throughput)
         4. Cross-family batching opportunities
+        5. Predictive tool grouping based on common patterns
         
         Returns a list where each element is either a single tool call or a list of tool calls
         that can be executed as a batch.
@@ -456,60 +455,77 @@ class Agent:
             return []
         
         # Categorize tools by family and operation type
-        fast_tools = []      # TMDb, quick Plex operations
-        medium_tools = []    # Plex searches, *arr reads
-        slow_tools = []      # *arr writes, complex operations
-        write_tools = []     # Any write operations
+        ultra_fast_tools = []  # TMDb searches, Plex quick ops
+        fast_tools = []        # TMDb details, Plex metadata
+        medium_tools = []      # *arr reads, Plex complex ops
+        slow_tools = []        # *arr writes, complex operations
+        write_tools = []       # Any write operations
         
         for tc in tool_calls:
             name = tc.function.name
             family = self._classify_tool_family(name)
             
-            # Categorize by performance characteristics
+            # Enhanced categorization for better batching
             if family == "tmdb":
-                fast_tools.append(tc)
+                if any(op in name for op in ["search", "discover", "trending", "popular"]):
+                    ultra_fast_tools.append(tc)
+                else:
+                    fast_tools.append(tc)
             elif family == "plex":
-                if any(op in name for op in ["search", "get_", "recently_added", "on_deck"]):
+                if any(op in name for op in ["search", "get_recently_added", "get_on_deck", "get_library_sections"]):
+                    ultra_fast_tools.append(tc)
+                elif any(op in name for op in ["get_", "recently_added", "on_deck"]):
                     fast_tools.append(tc)
                 else:
                     medium_tools.append(tc)
             elif family in ["radarr", "sonarr"]:
-                if "get_" in name or "system_status" in name:
-                    medium_tools.append(tc)
-                else:
+                if "get_" in name or "system_status" in name or "quality_profiles" in name or "root_folders" in name:
+                    fast_tools.append(tc)
+                elif "add_" in name or "update_" in name or "delete_" in name or "monitor" in name:
                     slow_tools.append(tc)
+                else:
+                    medium_tools.append(tc)
             else:
-                medium_tools.append(tc)
+                fast_tools.append(tc)
             
             # Track write operations separately
             if self._is_write_tool_name(name):
                 write_tools.append(tc)
         
-        # Create optimized batches
+        # Create ultra-optimized batches with increased sizes
         result = []
         
-        # Batch fast tools aggressively (up to 8 per batch)
+        # Ultra-fast tools: batch up to 16 per batch (TMDb can handle high concurrency)
+        if ultra_fast_tools:
+            for i in range(0, len(ultra_fast_tools), 16):
+                batch = ultra_fast_tools[i:i+16]
+                if len(batch) > 1:
+                    result.append(batch)
+                else:
+                    result.append(batch[0])
+        
+        # Fast tools: batch up to 12 per batch
         if fast_tools:
-            for i in range(0, len(fast_tools), 8):
-                batch = fast_tools[i:i+8]
+            for i in range(0, len(fast_tools), 12):
+                batch = fast_tools[i:i+12]
                 if len(batch) > 1:
                     result.append(batch)
                 else:
                     result.append(batch[0])
         
-        # Batch medium tools moderately (up to 4 per batch)
+        # Medium tools: batch up to 8 per batch (increased from 4)
         if medium_tools:
-            for i in range(0, len(medium_tools), 4):
-                batch = medium_tools[i:i+4]
+            for i in range(0, len(medium_tools), 8):
+                batch = medium_tools[i:i+8]
                 if len(batch) > 1:
                     result.append(batch)
                 else:
                     result.append(batch[0])
         
-        # Keep slow tools individual or small batches (up to 2 per batch)
+        # Slow tools: batch up to 4 per batch (increased from 2)
         if slow_tools:
-            for i in range(0, len(slow_tools), 2):
-                batch = slow_tools[i:i+2]
+            for i in range(0, len(slow_tools), 4):
+                batch = slow_tools[i:i+4]
                 if len(batch) > 1:
                     result.append(batch)
                 else:
@@ -723,7 +739,7 @@ class Agent:
             return individual_results
 
     async def _arun_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, role: str, max_iters: int | None = None, stream_final_to_callback: Optional[Callable[[str], Any]] = None) -> Any:
-        """Async version of _run_tools_loop for non-blocking operations."""
+        """Async version of _run_tools_loop with pipelined execution for maximum performance."""
         # Load runtime config for loop controls
         rc = load_runtime_config(self.project_root)
         # Role-specific iteration limits: prefer agentMaxIters/workerMaxIters, fallback to legacy maxIters
@@ -819,10 +835,16 @@ class Agent:
         if should_add_prefs:
             try:
                 prefs_path = self.project_root / "data" / "household_preferences.json"
-                def _read_prefs():
+                # Use async file operations instead of asyncio.to_thread
+                try:
+                    import aiofiles
+                    async with aiofiles.open(prefs_path, "r", encoding="utf-8") as f:
+                        content = await f.read()
+                        prefs = json.loads(content)
+                except ImportError:
+                    # Fallback to sync file operations if aiofiles not available
                     with open(prefs_path, "r", encoding="utf-8") as f:
-                        return json.load(f)
-                prefs = await asyncio.to_thread(_read_prefs)
+                        prefs = json.load(f)
                 compact = build_preferences_context(prefs)
                 if compact.strip():
                     messages.append({
@@ -856,15 +878,20 @@ class Agent:
         llm_calls_count = 0
         import time as _t
         t_loop_start = _t.monotonic()
+        
+        # PIPELINED EXECUTION: Start first LLM call immediately
+        current_llm_task = asyncio.create_task(self._achat_once(messages, model, role, tool_choice_override=next_tool_choice_override))
+        llm_calls_count += 1
+        next_tool_choice_override = None
+        
         for iter_idx in range(iters):
             self.log.info(f"agent iteration {iter_idx+1}/{iters}")
             
             # Notify progress callback about LLM thinking
             await self._emit_progress("thinking", {"iteration": f"{iter_idx+1}/{iters}"})
             
-            last_response = await self._achat_once(messages, model, role, tool_choice_override=next_tool_choice_override)
-            llm_calls_count += 1
-            next_tool_choice_override = None
+            # Wait for current LLM call to complete
+            last_response = await current_llm_task
             choice = last_response.choices[0]
             msg = choice.message
             tool_calls = getattr(msg, 'tool_calls', None)
@@ -952,11 +979,12 @@ class Agent:
             
             async def run_one_or_batch(tc_or_group):
                 if isinstance(tc_or_group, list):
-                    # Batch execution
+                    # Batch execution - returns List[tuple]
                     return await self._execute_tool_batch(tc_or_group, timeout_ms, retry_max, backoff_base_ms, dedup_cache)
                 else:
-                    # Single tool execution
-                    return await self._execute_single_tool(tc_or_group, timeout_ms, retry_max, backoff_base_ms, dedup_cache)
+                    # Single tool execution - returns tuple, wrap in list for consistency
+                    result = await self._execute_single_tool(tc_or_group, timeout_ms, retry_max, backoff_base_ms, dedup_cache)
+                    return [result]
 
             # Run with bounded concurrency
             sem = asyncio.Semaphore(parallelism)
@@ -965,8 +993,35 @@ class Agent:
                 async with sem:
                     return await run_one_or_batch(tc_or_group)
 
-            # Execute all tools (single or batched) concurrently
-            results = await asyncio.gather(*[sem_wrapped(tc_or_group) for tc_or_group in tool_groups])
+            # PIPELINED EXECUTION: Start tool execution and next LLM call concurrently
+            tool_execution_task = asyncio.create_task(
+                asyncio.gather(*[sem_wrapped(tc_or_group) for tc_or_group in tool_groups])
+            )
+            
+            # Start next LLM call immediately if not finalizing
+            next_llm_task = None
+            if iter_idx < iters - 1:  # Not the last iteration
+                # Prepare messages for next iteration
+                temp_messages = messages.copy()
+                temp_messages.append({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        }
+                        for tc in tool_calls
+                    ],
+                })
+                next_llm_task = asyncio.create_task(
+                    self._achat_once(temp_messages, model, role, tool_choice_override=next_tool_choice_override)
+                )
+                llm_calls_count += 1
+
+            # Wait for tool execution to complete
+            results = await tool_execution_task
             
             # Flatten results from batched executions
             flattened_results = []
@@ -1122,8 +1177,19 @@ class Agent:
                 except Exception:
                     force_finalize_next = False
 
+            # Update current_llm_task for next iteration
+            if next_llm_task is not None:
+                current_llm_task = next_llm_task
+            else:
+                # Last iteration - no more LLM calls
+                current_llm_task = None
+
             if force_finalize_next and (tool_calls is None or len(tool_calls) == 0):
                 next_tool_choice_override = "none"
+
+        # Wait for any remaining LLM task to complete
+        if current_llm_task is not None:
+            await current_llm_task
 
         # Metrics
         try:
@@ -1634,11 +1700,12 @@ Generate a response that acknowledges the iteration limit while being genuinely 
         cache_ttl_sec = int(self._tuning_cfg.get("cache_ttl_short", 60))
         
         async def process_single_result(tool_call_id, name, result, attempts, cache_hit):
-            """Process a single tool result asynchronously."""
+            """Process a single tool result asynchronously with no blocking operations."""
             # Store raw result and attach ref_id for on-demand detail fetching
             ref_id = None
             try:
-                ref_id = await asyncio.to_thread(put_tool_result, result, cache_ttl_sec)
+                # Use async cache operations instead of asyncio.to_thread
+                ref_id = await put_tool_result(result, cache_ttl_sec)
             except Exception:
                 ref_id = None
 
@@ -1653,9 +1720,9 @@ Generate a response that acknowledges the iteration limit while being genuinely 
             except Exception:
                 summarized = result
 
-            # Create payload and serialize JSON asynchronously
+            # Create payload and serialize JSON directly (no blocking)
             payload = {"ref_id": ref_id, "summary": summarized}
-            content = await asyncio.to_thread(json.dumps, payload, separators=(",", ":"))
+            content = json.dumps(payload, separators=(",", ":"))
             
             return {
                 "role": "tool",

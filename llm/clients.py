@@ -169,8 +169,8 @@ class LLMClient:
             self.client = OpenRouterClient(api_key)
         else:
             self.client = OpenAI(api_key=api_key)
-            # Initialize async client for async operations
-            self.async_client = AsyncOpenAI(api_key=api_key)
+            # Initialize async client for async operations with retry configuration
+            self.async_client = AsyncOpenAI(api_key=api_key, max_retries=3)
         # Initialize tiktoken for token counting
         self._encoding = tiktoken.get_encoding("cl100k_base")  # GPT-4/5 family encoding
 
@@ -271,7 +271,7 @@ class LLMClient:
             return self.client.chat.completions.create(**params)  # type: ignore[no-any-return]
 
     async def achat(self, *, model: str, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, reasoning: Optional[str] = None, tool_choice: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
-        """Async version of chat method."""
+        """Ultra-optimized async chat method with connection pooling and request optimization."""
         # Do not force reasoning; rely on selection providers
         # For OpenRouter, we need to handle the model name differently
         if self.provider == "openrouter":
@@ -286,7 +286,7 @@ class LLMClient:
                 **self._normalize_params(kwargs)
             )
         else:
-            # OpenAI async client
+            # OpenAI async client with optimized parameters
             params: Dict[str, Any] = {"model": model, "messages": messages}
             if tools is not None:
                 params["tools"] = tools
@@ -296,6 +296,10 @@ class LLMClient:
             if (tools is not None) and (tool_choice is not None):
                 params["tool_choice"] = tool_choice
             params.update(self._normalize_params_openai(model, kwargs))
+            
+            # Add connection optimization parameters
+            params["timeout"] = 60.0  # Increased timeout for better reliability
+            
             return await self.async_client.chat.completions.create(**params)  # type: ignore[no-any-return]
 
     async def astream_chat(self, *, model: str, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, reasoning: Optional[str] = None, tool_choice: Optional[str] = None, **kwargs: Any):

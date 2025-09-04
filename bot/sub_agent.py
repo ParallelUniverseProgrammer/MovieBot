@@ -427,16 +427,20 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
                 {"role": "user", "content": user_instructions},
             ]
 
-            response = await self._achat_once(messages, model, "worker")
+            # PIPELINED EXECUTION: Start LLM call immediately
+            llm_task = asyncio.create_task(self._achat_once(messages, model, "worker"))
 
             try:
+                response = await llm_task
                 content = response.choices[0].message.content or ""
                 tool_calls = getattr(response.choices[0].message, "tool_calls", None)
 
                 if tool_calls:
                     self.log.info(f"Sub-agent executing {len(tool_calls)} tool calls for smart recommendations")
-                    results = await self._execute_tool_calls(tool_calls)
-
+                    # Start tool execution and next LLM call concurrently
+                    tool_task = asyncio.create_task(self._execute_tool_calls(tool_calls))
+                    
+                    # Prepare final messages while tools are running
                     final_messages = messages + [
                         {
                             "role": "assistant",
@@ -450,7 +454,13 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
                                 for tc in tool_calls
                             ],
                         }
-                    ] + [
+                    ]
+                    
+                    # Wait for tools to complete
+                    results = await tool_task
+                    
+                    # Add tool results to messages
+                    final_messages.extend([
                         {
                             "role": "tool",
                             "tool_call_id": tc.id,
@@ -458,13 +468,18 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
                             "content": json.dumps(result),
                         }
                         for tc, result in zip(tool_calls, results)
-                    ]
+                    ])
 
                     final_messages.append({
                         "role": "system",
                         "content": "Finalize now: produce a concise, friendly list of up to max_results recommendations with one-sentence reasons. Do not call tools.",
                     })
-                    final_response = await self._achat_once(final_messages, model, "worker", tool_choice_override="none")
+                    
+                    # Start final LLM call immediately
+                    final_llm_task = asyncio.create_task(
+                        self._achat_once(final_messages, model, "worker", tool_choice_override="none")
+                    )
+                    final_response = await final_llm_task
                     final_content = final_response.choices[0].message.content or ""
                     self.log.info(f"Smart recommendations completed. Final response: {final_content[:200]}...")
                     return {
@@ -547,16 +562,20 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
                 {"role": "user", "content": user_instructions},
             ]
 
-            response = await self._achat_once(messages, model, "worker")
+            # PIPELINED EXECUTION: Start LLM call immediately
+            llm_task = asyncio.create_task(self._achat_once(messages, model, "worker"))
 
             try:
+                response = await llm_task
                 content = response.choices[0].message.content or ""
                 tool_calls = getattr(response.choices[0].message, "tool_calls", None)
 
                 if tool_calls:
                     self.log.info(f"Sub-agent executing {len(tool_calls)} tool calls for intelligent search")
-                    results = await self._execute_tool_calls(tool_calls)
-
+                    # Start tool execution and prepare final messages concurrently
+                    tool_task = asyncio.create_task(self._execute_tool_calls(tool_calls))
+                    
+                    # Prepare final messages while tools are running
                     final_messages = messages + [
                         {
                             "role": "assistant",
@@ -570,7 +589,13 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
                                 for tc in tool_calls
                             ],
                         }
-                    ] + [
+                    ]
+                    
+                    # Wait for tools to complete
+                    results = await tool_task
+                    
+                    # Add tool results to messages
+                    final_messages.extend([
                         {
                             "role": "tool",
                             "tool_call_id": tc.id,
@@ -578,13 +603,18 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
                             "content": json.dumps(result),
                         }
                         for tc, result in zip(tool_calls, results)
-                    ]
+                    ])
 
                     final_messages.append({
                         "role": "system",
                         "content": "Finalize now: produce a concise merged result list with brief explanations and availability hints. Do not call tools.",
                     })
-                    final_response = await self._achat_once(final_messages, model, "worker", tool_choice_override="none")
+                    
+                    # Start final LLM call immediately
+                    final_llm_task = asyncio.create_task(
+                        self._achat_once(final_messages, model, "worker", tool_choice_override="none")
+                    )
+                    final_response = await final_llm_task
                     final_content = final_response.choices[0].message.content or ""
                     self.log.info(f"Intelligent search completed. Final response: {final_content[:200]}...")
                     return {

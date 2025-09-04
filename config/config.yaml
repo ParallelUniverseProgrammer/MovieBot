@@ -18,7 +18,7 @@ llm:
         params:
           tool_choice: auto
       smart:
-        model: gpt-5
+        model: gpt-5-mini
         reasoningEffort: medium
         params:
           temperature: 1
