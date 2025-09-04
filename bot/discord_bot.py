@@ -437,23 +437,39 @@ class MovieBotClient(discord.Client):
         # Progress callback function for the agent -> enqueue events
         def progress_callback(progress_type: str, details: str):
             try:
+                # Debug logging
+                print(f"PROGRESS CALLBACK: {progress_type} -> {details}")
+                log.debug(f"Progress callback received: {progress_type} -> {details}")
+                
                 # Drop noisy heartbeat updates from the UI queue
                 if progress_type == "heartbeat":
                     return
-                # Normalize event types from agent
-                mapped_type = progress_type
-                if progress_type == "tool":
-                    mapped_type = "tool_start"
+                
+                # Parse details if it's a JSON string (from agent data)
+                parsed_details = details
+                try:
+                    import json
+                    if details.startswith('{') or details.startswith('['):
+                        parsed_details = json.loads(details)
+                except (json.JSONDecodeError, AttributeError):
+                    # Not JSON, use as-is
+                    pass
+                
+                # Pass through event types as-is (agent already emits correct types)
                 # Ensure thread-safety if ever called off-loop
                 try:
                     loop = asyncio.get_running_loop()
-                    loop.call_soon_threadsafe(progress_events.put_nowait, {"type": mapped_type, "details": details})
+                    event_data = {"type": progress_type, "details": parsed_details}
+                    loop.call_soon_threadsafe(progress_events.put_nowait, event_data)
+                    log.debug(f"Progress event queued: {event_data}")
                 except RuntimeError:
                     # No running loop - this shouldn't happen in Discord context
                     # but if it does, we'll skip the update rather than risk race conditions
+                    log.warning("No running loop for progress callback")
                     pass
-            except Exception:
-                # Silent failure for progress updates
+            except Exception as e:
+                # Log errors for debugging
+                log.warning(f"Progress callback error: {e}")
                 pass
         
         agent = Agent(api_key=api_key, project_root=self.project_root, provider=provider, progress_callback=progress_callback)  # type: ignore[arg-type]
@@ -575,8 +591,17 @@ class MovieBotClient(discord.Client):
 
                         # Calculate progress based on event type
                         progress_value = progress_calc.calculate_progress(evt.get("type"), evt)
+                        
+                        # Extract tool name from details if it's a dict
+                        tool_name = None
+                        details = evt.get("details")
+                        if isinstance(details, dict):
+                            tool_name = details.get("name") or details.get("tool")
+                        elif isinstance(details, str):
+                            tool_name = details
+                        
                         initial = _get_clever_progress_message(1,  # type: ignore[attr-defined]
-                                                               evt.get("details"),
+                                                               tool_name,
                                                                evt.get("type"))
                         
                         # Create rich progress embed
@@ -593,13 +618,18 @@ class MovieBotClient(discord.Client):
                         while not done.is_set():
                             try:
                                 evt = await asyncio.wait_for(progress_events.get(), timeout=30)
+                                print(f"PROGRESS UPDATER: {evt}")
+                                log.debug(f"Progress updater received event: {evt}")
                             except asyncio.TimeoutError:
                                 # No new events for a while; do not update arbitrarily
+                                log.debug("Progress updater timeout - no events for 30s")
                                 continue
 
                             # Determine if we should update based on type, frequency, and time interval
                             ptype = evt.get("type")
+                            log.debug(f"Processing event type: {ptype}")
                             if ptype in {"heartbeat"}:
+                                log.debug("Skipping heartbeat event")
                                 continue
 
                             event_counter += 1
@@ -608,16 +638,28 @@ class MovieBotClient(discord.Client):
                             # Update based on time interval (respect config)
                             if (now_ms - last_edit_ms) >= min_update_ms:
                                 should_update = True
+                                log.debug(f"Update triggered by time interval: {now_ms - last_edit_ms}ms >= {min_update_ms}ms")
                             # Also update on every event if frequency is 1, or every Nth event
                             elif freq == 1 or (freq > 1 and (event_counter % freq == 0)):
                                 should_update = True
+                                log.debug(f"Update triggered by frequency: event {event_counter}, freq {freq}")
                             if not should_update:
+                                log.debug(f"Skipping update: time={now_ms - last_edit_ms}ms, freq={freq}, event={event_counter}")
                                 continue
 
                             # Calculate progress based on event type
                             progress_value = progress_calc.calculate_progress(ptype, evt)
-                            tool_name = evt.get("details")
+                            
+                            # Extract tool name from details if it's a dict
+                            tool_name = None
+                            details = evt.get("details")
+                            if isinstance(details, dict):
+                                tool_name = details.get("name") or details.get("tool")
+                            elif isinstance(details, str):
+                                tool_name = details
+                            
                             new_message = _get_clever_progress_message(event_counter, tool_name, ptype)  # type: ignore[attr-defined]
+                            log.debug(f"Progress update: {progress_value:.1%} - {new_message}")
                             if progress_message and new_message != last_rendered:
                                 # Update progress embed with calculated progress
                                 updated_embed = MovieBotEmbeds.create_progress_embed(
@@ -626,9 +668,12 @@ class MovieBotClient(discord.Client):
                                     progress=progress_value,
                                     status="working"
                                 )
+                                log.debug(f"Updating progress message: {progress_value:.1%}")
                                 await progress_message.edit(embed=updated_embed)
                                 last_rendered = new_message
                                 last_edit_ms = now_ms
+                            else:
+                                log.debug(f"Skipping duplicate message or no progress_message")
                     except Exception as e:
                         log.warning(f"Failed to send or update progress message: {e}")
 
