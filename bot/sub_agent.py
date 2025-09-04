@@ -395,7 +395,13 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
             "You are a focused recommendation sub-agent. Use minimal tools in one pass.\n"
             "1) Load compact household preferences for taste grounding.\n"
             "2) If a seed TMDb id is provided and media_type==movie, call tmdb_recommendations for it.\n"
-            "   Otherwise, fetch a reasonable small candidate set via tmdb_trending or tmdb_popular_movies (movies only).\n"
+            "   Otherwise, use tmdb_discover_movies or tmdb_discover_tv with filters based on household preferences:\n"
+            "   - Use with_genres for liked genres from preferences\n"
+            "   - Use without_genres for disliked genres from preferences\n"
+            "   - Use with_cast for trusted faces from preferences\n"
+            "   - Use primary_release_year/first_air_date_year >= eraMinYear from preferences\n"
+            "   - Use with_original_language for languageWhitelist from preferences\n"
+            "   - Use with_runtime_gte/lte for runtimeSweetSpotMins from preferences\n"
             "3) Select up to max_results items aligned with preferences.\n"
             "4) Produce a concise, user-facing list: Title (Year) — one-sentence why it fits.\n"
             "Do not call tools in the finalization step."
@@ -413,7 +419,7 @@ Available tools: sonarr_quality_profiles, sonarr_update_series
                 f"Household-aligned recommendations. max_results={max_results}. media_type={mt}.\n"
                 f"Seed TMDb id: {seed_tmdb_id if seed_tmdb_id is not None else '-'}\n"
                 f"User prompt (optional): {prompt or '-'}\n"
-                "Tools to consider: read_household_preferences (compact), tmdb_recommendations, tmdb_trending, tmdb_popular_movies, tmdb_movie_details."
+                "Tools to consider: read_household_preferences (compact), tmdb_recommendations, tmdb_discover_movies, tmdb_discover_tv, tmdb_movie_details, tmdb_tv_details."
             )
 
             messages = [
