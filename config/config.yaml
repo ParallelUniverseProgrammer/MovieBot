@@ -16,7 +16,6 @@ llm:
         model: gpt-4.1-mini
         #reasoningEffort: minimal
         params:
-          temperature: 0.7
           tool_choice: auto
       smart:
         model: gpt-5
