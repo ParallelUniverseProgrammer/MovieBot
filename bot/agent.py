@@ -792,38 +792,38 @@ class Agent:
 
 
 
-        # Classify query complexity and adjust iteration limit
-        complexity = self._classify_query_complexity(base_messages)
-        optimal_iters = self._get_optimal_iteration_limit(complexity, role)
-        iters = min(iters, optimal_iters)  # Use the smaller of config limit or optimal limit
+        # Use LLM-based query classification for better decision making
+        classification_result = await self._classify_query_complexity_llm(base_messages)
+        complexity = classification_result["complexity"]
+        confidence = classification_result["confidence"]
+        reasoning = classification_result["reasoning"]
+        requires_write = classification_result["requires_write"]
+        suggested_tools = classification_result["suggested_tools"]
+        estimated_iterations = classification_result["estimated_iterations"]
         
-        # Check for query templates for common patterns
-        query_template = self._get_query_template(base_messages)
+        # Use LLM-suggested iteration limit, but respect config maximums
+        optimal_iters = min(estimated_iterations, iters)
+        iters = optimal_iters
         
-        # Add adaptive iteration adjustment based on query template
-        if query_template is not None:
-            # For template-based queries, we can be more aggressive with iteration limits
-            if query_template["name"] in ["whats_new", "library_browse", "system_status"]:
-                iters = min(iters, 2)  # Very simple queries
-            elif query_template["name"] in ["trending", "genre_discovery", "year_discovery"]:
-                iters = min(iters, 3)  # Medium complexity queries
-            elif query_template["name"] in ["similar_content"]:
-                iters = min(iters, 4)  # Slightly more complex queries
-            
-            # Add template guidance to system message
-            template_guidance = f"\n\nQUERY TEMPLATE DETECTED: {query_template['description']}\n"
-            template_guidance += f"Suggested tools: {', '.join(query_template['tools'])}\n"
-            template_guidance += "Use these tools in parallel for optimal results."
-            messages.append({"role": "system", "content": template_guidance})
+        # Add LLM classification guidance to system message
+        if suggested_tools:
+            classification_guidance = f"\n\nQUERY CLASSIFICATION: {complexity.upper()} (confidence: {confidence:.1f})\n"
+            classification_guidance += f"Reasoning: {reasoning}\n"
+            classification_guidance += f"Suggested tools: {', '.join(suggested_tools)}\n"
+            classification_guidance += f"Estimated iterations: {estimated_iterations}\n"
+            classification_guidance += "Use the suggested tools in parallel for optimal results."
+            messages.append({"role": "system", "content": classification_guidance})
         
-        must_write = _user_intent_requires_write(base_messages)
+        must_write = requires_write or _user_intent_requires_write(base_messages)
         
         # Emit optimization details
         optimization_info = {
             "parallelism": parallelism_for_prompt, 
             "iters": iters,
             "complexity": complexity,
-            "template": query_template["name"] if query_template else None,
+            "confidence": confidence,
+            "reasoning": reasoning,
+            "suggested_tools": suggested_tools,
             "must_write": must_write
         }
         await self._emit_progress("agent.start", optimization_info)
@@ -1016,9 +1016,55 @@ class Agent:
                     flattened_results.append(result)
             total_tool_calls += len(flattened_results)
             
+            # Check for early termination tool call
+            early_termination_requested = False
+            termination_reason = ""
+            termination_confidence = 0.0
+            termination_summary = ""
+            
+            for _tc_id, name, result, _attempts, _cache_hit in flattened_results:
+                if str(name) == "agent_early_terminate" and isinstance(result, dict) and result.get("termination_requested"):
+                    early_termination_requested = True
+                    termination_reason = result.get("reason", "Agent determined sufficient information gathered")
+                    termination_confidence = result.get("confidence", 0.8)
+                    termination_summary = result.get("summary", "")
+                    self.log.info(f"Early termination requested: {termination_reason} (confidence: {termination_confidence:.2f})")
+                    break
+            
             # Process results asynchronously for better performance
             processed_messages = await self._process_results_async(flattened_results)
             messages.extend(processed_messages)
+            
+            # Handle early termination if requested
+            if early_termination_requested:
+                try:
+                    # Use quick model for finalization
+                    from config.loader import resolve_llm_selection
+                    quick_provider, quick_sel = resolve_llm_selection(self.project_root, "quick")
+                    quick_model = quick_sel.get("model")
+                    
+                    # Add termination context to messages
+                    messages.append({
+                        "role": "system",
+                        "content": f"Early termination requested: {termination_reason}\nConfidence: {termination_confidence:.2f}\nSummary: {termination_summary}\n\nFinalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Be warm, friendly, and decisive. Use plain, upbeat language. Do not call tools."
+                    })
+                    
+                    if quick_model and quick_provider == provider:
+                        self.log.info(f"Using quick model {quick_model} for early termination finalization")
+                        resp = await self._achat_once(messages, quick_model, "quick", tool_choice_override="none")
+                    else:
+                        resp = await self._achat_once(messages, model, role, tool_choice_override="none")
+                    
+                    try:
+                        if getattr(self, "progress", None) is not None:
+                            self.progress.stop_heartbeat("agent")
+                    except Exception:
+                        pass
+                    await self._emit_progress("agent.finish", {"reason": "early_termination", "termination_reason": termination_reason})
+                    return resp
+                except Exception as e:
+                    self.log.warning(f"Early termination finalization failed: {e}, continuing with normal flow")
+                    # Continue with normal flow if early termination fails
             
             # Start next LLM call after tool execution and result processing is complete
             next_llm_task = None
@@ -1087,121 +1133,9 @@ class Agent:
                     force_finalize_next = True
                     next_tool_choice_override = "none"
             else:
-                try:
-                    # Calculate confidence score for better decision making
-                    confidence = self._calculate_result_confidence(flattened_results)
-                    allowed_to_finalize = self._results_indicate_finalizable(flattened_results)
-                    
-                    # Log confidence for debugging
-                    self.log.info(f"Result confidence: {confidence:.2f}, finalizable: {allowed_to_finalize}")
-                    if not allowed_to_finalize:
-                        self.log.info(f"Not finalizing: write_success={write_success}, allow_finalize_on_failure={allow_finalize_on_failure}, seen_write_intent={seen_write_intent}, must_write={must_write}")
-                    
-                    if write_success:
-                        allowed_to_finalize = False
-                    if not allow_finalize_on_failure:
-                        if seen_write_intent and not write_success:
-                            allowed_to_finalize = False
-                        if must_write and not write_success:
-                            allowed_to_finalize = False
-                    if allowed_to_finalize:
-                        # Check if this is a simple read-only query that can benefit from streaming
-                        is_simple_readonly = (complexity == "simple" and not must_write and 
-                                            query_template is not None and 
-                                            query_template["name"] in ["whats_new", "library_browse", "system_status", "trending"])
-                        
-                        messages.append({
-                            "role": "system",
-                            "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Be warm, friendly, and decisive. Use plain, upbeat language. Do not call tools."
-                        })
-                        
-                        # Use quick model for finalization when we have all the info we need
-                        try:
-                            from config.loader import resolve_llm_selection
-                            quick_provider, quick_sel = resolve_llm_selection(self.project_root, "quick")
-                            quick_model = quick_sel.get("model")
-                            quick_params = dict(quick_sel.get("params", {}))
-                            
-                            # Use quick model for finalization
-                            if quick_model and quick_provider == provider:
-                                self.log.info(f"Using quick model {quick_model} for finalization")
-                                final_response = await self._achat_once(messages, quick_model, "quick", tool_choice_override="none")
-                            else:
-                                # Fallback to original model if quick model not available
-                                final_response = await self._achat_once(messages, model, role, tool_choice_override="none")
-                        except Exception as e:
-                            self.log.warning(f"Failed to use quick model for finalization: {e}, falling back to {model}")
-                            final_response = await self._achat_once(messages, model, role, tool_choice_override="none")
-                        
-                        if stream_final_to_callback is not None and is_simple_readonly:
-                            # Use streaming for simple read-only queries
-                            try:
-                                from config.loader import resolve_llm_selection
-                                _, sel = resolve_llm_selection(self.project_root, role)
-                                params = dict(sel.get("params", {}))
-                                params["temperature"] = 1
-                                async for chunk in self.llm.astream_chat(
-                                    model=model,
-                                    messages=messages,
-                                    tools=None,
-                                    reasoning=sel.get("reasoningEffort"),
-                                    **params,
-                                ):
-                                    try:
-                                        await stream_final_to_callback(chunk)
-                                    except Exception:
-                                        pass
-                                try:
-                                    if getattr(self, "progress", None) is not None:
-                                        self.progress.stop_heartbeat("agent")
-                                except Exception:
-                                    pass
-                                await self._emit_progress("agent.finish", {"reason": "final_answer_streamed"})
-                                return final_response
-                            except Exception:
-                                force_finalize_next = True
-                        elif stream_final_to_callback is not None:
-                            # Use streaming for other queries too
-                            try:
-                                from config.loader import resolve_llm_selection
-                                _, sel = resolve_llm_selection(self.project_root, role)
-                                params = dict(sel.get("params", {}))
-                                params["temperature"] = 1
-                                async for chunk in self.llm.astream_chat(
-                                    model=model,
-                                    messages=messages,
-                                    tools=None,
-                                    reasoning=sel.get("reasoningEffort"),
-                                    **params,
-                                ):
-                                    try:
-                                        await stream_final_to_callback(chunk)
-                                    except Exception:
-                                        pass
-                                try:
-                                    if getattr(self, "progress", None) is not None:
-                                        self.progress.stop_heartbeat("agent")
-                                except Exception:
-                                    pass
-                                await self._emit_progress("agent.finish", {"reason": "final_answer"})
-                                return await self._achat_once(messages, model, role, tool_choice_override="none")
-                            except Exception:
-                                force_finalize_next = True
-                        else:
-                            # Finalize immediately without streaming
-                            try:
-                                resp = await self._achat_once(messages, model, role, tool_choice_override="none")
-                                try:
-                                    if getattr(self, "progress", None) is not None:
-                                        self.progress.stop_heartbeat("agent")
-                                except Exception:
-                                    pass
-                                await self._emit_progress("agent.finish", {"reason": "final_answer"})
-                                return resp
-                            except Exception:
-                                force_finalize_next = True
-                except Exception:
-                    force_finalize_next = False
+                # Let the agent decide when to terminate using the early termination tool
+                # No automatic confidence-based termination - agent has full control
+                pass
 
             # Update current_llm_task for next iteration
             if next_llm_task is not None:
@@ -1610,120 +1544,71 @@ Generate a response that acknowledges the iteration limit while being genuinely 
         model = sel.get("model", "gpt-5")
         return await self._arun_tools_loop(messages, model=model, role="smart")
 
-    def _classify_query_complexity(self, msgs: List[Dict[str, Any]]) -> str:
-        """Classify query complexity to determine optimal iteration strategy."""
+    async def _classify_query_complexity_llm(self, msgs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Use LLM to classify query complexity and extract metadata for better decision making."""
         try:
             text_parts: List[str] = [str(m.get("content", "")) for m in msgs if m.get("role") == "user"]
-            text = "\n".join(text_parts).lower()
-            if not text.strip():
-                return "unknown"
+            user_query = "\n".join(text_parts).strip()
+            if not user_query:
+                return {"complexity": "unknown", "confidence": 0.0, "reasoning": "Empty query"}
             
-            # Simple queries that can complete in 1-2 iterations
-            simple_patterns = [
-                "what's new", "what's recently added", "show me newest", "show me latest",
-                "what's in my library", "show me my movies", "show me my tv",
-                "oldest movies", "newest movies", "best rated", "most played",
-                "system status", "what's downloading", "queue status",
-                "trending", "popular movies", "popular tv"
-            ]
+            # Use summarizer role for classification
+            from config.loader import resolve_llm_selection
+            _, sel = resolve_llm_selection(self.project_root, "summarizer")
+            model = sel.get("model", "gpt-4.1-mini")
             
-            if any(pattern in text for pattern in simple_patterns):
-                return "simple"
-            
-            # Medium complexity queries (2-3 iterations)
-            medium_patterns = [
-                "action movies", "horror movies", "comedy movies", "drama movies",
-                "movies from", "tv shows from", "movies in", "tv shows in",
-                "similar to", "like", "recommendations", "suggest",
-                "rate this", "rating", "stars"
-            ]
-            
-            if any(pattern in text for pattern in medium_patterns):
-                return "medium"
-            
-            # Complex queries (3-6 iterations)
-            complex_patterns = [
-                "add", "download", "monitor", "remove", "delete",
-                "update", "change", "modify", "configure",
-                "search for", "find", "look for", "discover"
-            ]
-            
-            if any(pattern in text for pattern in complex_patterns):
-                return "complex"
-            
-            return "medium"  # Default to medium complexity
-        except Exception:
-            return "unknown"
+            classification_prompt = f"""Analyze this user query and classify its complexity for a movie/TV recommendation system.
 
-    def _get_optimal_iteration_limit(self, complexity: str, role: str) -> int:
-        """Determine optimal iteration limit based on query complexity and role."""
-        base_limits = {
-            "agent": {"simple": 2, "medium": 4, "complex": 6, "unknown": 4},
-            "worker": {"simple": 1, "medium": 2, "complex": 3, "unknown": 2},
-            "chat": {"simple": 2, "medium": 4, "complex": 6, "unknown": 4},
-            "smart": {"simple": 2, "medium": 4, "complex": 6, "unknown": 4}
-        }
-        return base_limits.get(role, base_limits["agent"]).get(complexity, 4)
+User Query: "{user_query}"
 
-    def _get_query_template(self, msgs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """Get query template for common patterns to optimize tool selection."""
-        try:
-            text_parts: List[str] = [str(m.get("content", "")) for m in msgs if m.get("role") == "user"]
-            text = "\n".join(text_parts).lower()
-            if not text.strip():
-                return None
+Classify the query into one of these categories:
+- simple: Basic information requests that can be answered with 1-2 tool calls (e.g., "what's new", "show me my movies", "system status")
+- medium: Moderate complexity requiring 2-4 tool calls (e.g., "action movies from 2020", "similar to Inception", "rate this movie")
+- complex: High complexity requiring 4+ tool calls (e.g., "add this movie to radarr", "find and download similar shows", "update my preferences")
+
+Also determine:
+- requires_write: Does this query need to modify data (add/update/delete)?
+- suggested_tools: What tools would be most helpful (comma-separated)?
+- estimated_iterations: How many iterations might be needed (1-6)?
+
+Respond in JSON format:
+{{
+    "complexity": "simple|medium|complex",
+    "confidence": 0.0-1.0,
+    "reasoning": "brief explanation",
+    "requires_write": true/false,
+    "suggested_tools": ["tool1", "tool2"],
+    "estimated_iterations": 1-6
+}}"""
+
+            messages = [{"role": "user", "content": classification_prompt}]
             
-            # Template patterns for common queries
-            templates = {
-                "whats_new": {
-                    "patterns": ["what's new", "what's recently added", "show me newest", "show me latest"],
-                    "tools": ["get_plex_recently_added", "get_plex_library_sections"],
-                    "description": "Show recently added content"
-                },
-                "library_browse": {
-                    "patterns": ["what's in my library", "show me my movies", "show me my tv", "browse library"],
-                    "tools": ["search_plex", "get_plex_library_sections"],
-                    "description": "Browse library content"
-                },
-                "system_status": {
-                    "patterns": ["system status", "what's downloading", "queue status", "status"],
-                    "tools": ["radarr_system_status", "sonarr_system_status", "get_plex_library_sections"],
-                    "description": "Check system status"
-                },
-                "trending": {
-                    "patterns": ["trending", "popular movies", "popular tv", "what's popular"],
-                    "tools": ["tmdb_trending", "search_plex"],
-                    "description": "Show trending content"
-                },
-                "genre_discovery": {
-                    "patterns": ["action movies", "horror movies", "comedy movies", "drama movies"],
-                    "tools": ["tmdb_discover_movies", "search_plex"],
-                    "description": "Discover movies by genre"
-                },
-                "year_discovery": {
-                    "patterns": ["movies from", "tv shows from", "movies in", "tv shows in"],
-                    "tools": ["tmdb_discover_movies", "tmdb_discover_tv", "search_plex"],
-                    "description": "Discover content by year"
-                },
-                "similar_content": {
-                    "patterns": ["similar to", "like", "recommendations", "suggest"],
-                    "tools": ["tmdb_similar_movies", "tmdb_similar_tv", "search_plex"],
-                    "description": "Find similar content"
+            # Use async chat for classification
+            resp = await self._achat_once(messages, model, "summarizer")
+            content = resp.choices[0].message.content
+            
+            # Parse JSON response
+            import json
+            try:
+                result = json.loads(content)
+                return {
+                    "complexity": result.get("complexity", "unknown"),
+                    "confidence": float(result.get("confidence", 0.0)),
+                    "reasoning": result.get("reasoning", ""),
+                    "requires_write": bool(result.get("requires_write", False)),
+                    "suggested_tools": result.get("suggested_tools", []),
+                    "estimated_iterations": int(result.get("estimated_iterations", 3))
                 }
-            }
-            
-            # Find matching template
-            for template_name, template_data in templates.items():
-                if any(pattern in text for pattern in template_data["patterns"]):
-                    return {
-                        "name": template_name,
-                        "tools": template_data["tools"],
-                        "description": template_data["description"]
-                    }
-            
-            return None
-        except Exception:
-            return None
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                self.log.error(f"Failed to parse LLM classification response: {e}")
+                raise RuntimeError(f"LLM classification response parsing failed: {e}")
+                
+        except Exception as e:
+            self.log.error(f"LLM classification failed: {e}")
+            raise RuntimeError(f"LLM classification failed: {e}")
+
+
+
 
     async def _process_results_async(self, flattened_results: List[tuple]) -> List[Dict[str, Any]]:
         """Process tool results asynchronously for better performance.

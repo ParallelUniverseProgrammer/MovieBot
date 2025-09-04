@@ -393,6 +393,20 @@ class PromptComponents:
         )
 
     @staticmethod
+    def early_termination_guidance() -> str:
+        """Guidance for using the early termination tool."""
+        return (
+            "EARLY TERMINATION:\n"
+            "• Use agent_early_terminate when you have sufficient information to answer the user's question.\n"
+            "• Don't wait for iteration limits - terminate as soon as you have what's needed.\n"
+            "• Provide a clear reason and confidence level (0.0-1.0) when terminating.\n"
+            "• For simple queries: terminate after 1-2 tool calls if you have the answer.\n"
+            "• For complex queries: terminate when all requested actions are complete.\n"
+            "• Always validate write operations before terminating.\n"
+            "• Be decisive - if you have enough info, terminate immediately."
+        )
+
+    @staticmethod
     def write_operation_guidance() -> str:
         """Guidance for write operations and system modifications."""
         return (
@@ -473,6 +487,7 @@ def build_minimal_system_prompt() -> str:
             components.parameter_validation(),
             components.validation_first_writes(),
             components.write_operation_guidance(),
+            components.early_termination_guidance(),
             components.loop_prevention(),
             components.response_optimization(),
             components.quality_standards(),

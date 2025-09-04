@@ -16,6 +16,7 @@ from .tool_impl import (
     make_query_household_preferences,
     make_smart_recommendations,
     make_intelligent_search,
+    make_agent_early_terminate,
 )
 from .tool_impl_plex import (
     make_get_plex_movies_4k_or_hdr,
@@ -543,6 +544,11 @@ def _define_openai_tools() -> List[Dict[str, Any]]:
             "start_date": {"type": ["string", "null"], "description": "Start date for calendar (ISO format)"},
             "end_date": {"type": ["string", "null"], "description": "End date for calendar (ISO format)"}
         }),
+        fn("agent_early_terminate", "Signal that the agent has sufficient information and should terminate early with a final response.", {
+            "reason": {"type": ["string", "null"], "description": "Reason for early termination (e.g., 'Found all requested movies', 'Query fully answered')"},
+            "confidence": {"type": ["number", "null"], "description": "Confidence level (0.0-1.0) in the completeness of the response", "minimum": 0.0, "maximum": 1.0},
+            "summary": {"type": ["string", "null"], "description": "Brief summary of what was accomplished"}
+        }),
     ]
 
 
@@ -648,6 +654,7 @@ def build_openai_tools_and_registry(project_root: Path, llm_client=None) -> Tupl
         tools.register("query_household_preferences", make_query_household_preferences(project_root, llm_client))
     tools.register("smart_recommendations", make_smart_recommendations(project_root))
     tools.register("intelligent_search", make_intelligent_search(project_root))
+    tools.register("agent_early_terminate", make_agent_early_terminate(project_root))
     # Utility: fetch cached results
     tools.register("fetch_cached_result", make_fetch_cached_result(project_root))
 

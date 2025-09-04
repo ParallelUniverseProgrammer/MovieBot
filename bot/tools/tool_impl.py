@@ -688,3 +688,27 @@ def make_intelligent_search(project_root: Path) -> Callable[[dict], Awaitable[di
             pass
 
     return impl
+
+
+def make_agent_early_terminate(project_root: Path) -> Callable[[dict], Awaitable[dict]]:
+    """Allow the agent to signal early termination when it has sufficient information."""
+    async def impl(args: dict) -> dict:
+        try:
+            reason = args.get("reason", "Agent determined sufficient information gathered")
+            confidence = args.get("confidence", 0.8)
+            summary = args.get("summary", "")
+            
+            # This is a special tool that signals the agent loop to terminate
+            # The actual termination logic will be handled in the agent loop
+            return {
+                "ok": True,
+                "termination_requested": True,
+                "reason": reason,
+                "confidence": confidence,
+                "summary": summary,
+                "message": f"Agent requests early termination: {reason}"
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    return impl
