@@ -1043,13 +1043,16 @@ class Agent:
                     quick_provider, quick_sel = resolve_llm_selection(self.project_root, "quick")
                     quick_model = quick_sel.get("model")
                     
+                    # Get the provider for the current model
+                    current_provider, _ = resolve_llm_selection(self.project_root, role)
+                    
                     # Add termination context to messages
                     messages.append({
                         "role": "system",
                         "content": f"Early termination requested: {termination_reason}\nConfidence: {termination_confidence:.2f}\nSummary: {termination_summary}\n\nFinalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Be warm, friendly, and decisive. Use plain, upbeat language. Do not call tools."
                     })
                     
-                    if quick_model and quick_provider == provider:
+                    if quick_model and quick_provider == current_provider:
                         self.log.info(f"Using quick model {quick_model} for early termination finalization")
                         resp = await self._achat_once(messages, quick_model, "quick", tool_choice_override="none")
                     else:
@@ -1112,7 +1115,10 @@ class Agent:
                         quick_provider, quick_sel = resolve_llm_selection(self.project_root, "quick")
                         quick_model = quick_sel.get("model")
                         
-                        if quick_model and quick_provider == provider:
+                        # Get the provider for the current model
+                        current_provider, _ = resolve_llm_selection(self.project_root, role)
+                        
+                        if quick_model and quick_provider == current_provider:
                             self.log.info(f"Using quick model {quick_model} for post-validation finalization")
                             resp = await self._achat_once(messages, quick_model, "quick", tool_choice_override="none")
                         else:

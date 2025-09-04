@@ -407,6 +407,328 @@ class MovieBotClient(discord.Client):
         else:
             await self.tree.sync()
 
+    async def _enrich_movie_data(self, title: str, year: str) -> dict:
+        """Try to enrich movie data with TMDb information."""
+        try:
+            # Import here to avoid circular imports
+            from integrations.tmdb_client import TMDbClient
+            from config.loader import load_settings
+            
+            settings = load_settings(self.project_root)
+            tmdb_api_key = settings.tmdb_api_key
+            
+            if not tmdb_api_key:
+                return None
+                
+            client = TMDbClient(tmdb_api_key)
+            
+            # Search for the movie
+            search_results = await client.search_movie(title, year=int(year))
+            if search_results and search_results.get('results'):
+                # Get the first result (most relevant)
+                movie = search_results['results'][0]
+                # Get detailed information with STANDARD level to include genres
+                from integrations.tmdb_client import TMDbResponseLevel
+                details = await client.movie_details(movie['id'], response_level=TMDbResponseLevel.STANDARD)
+                return details
+        except Exception as e:
+            log = logging.getLogger("moviebot.bot")
+            log.debug(f"Failed to enrich movie data for {title} ({year}): {e}")
+        
+        return None
+
+    async def _create_smart_embed(self, text: str, used_quick_path: bool = False) -> discord.Embed:
+        """Create an intelligent embed based on response content analysis."""
+        import re
+        import json
+        
+        # Helper function to extract rating from text
+        def extract_rating(text: str) -> float:
+            """Extract rating from text patterns like '8.8/10', '4.5/5', '85%'"""
+            rating_patterns = [
+                r'(\d+\.?\d*)\s*/\s*10',  # 8.8/10
+                r'(\d+\.?\d*)\s*/\s*5',   # 4.5/5
+                r'(\d+\.?\d*)%',          # 85%
+                r'rating[:\s]*(\d+\.?\d*)',  # rating: 8.8
+                r'(\d+\.?\d*)\s*out\s*of\s*10',  # 8.8 out of 10
+                r'rating\s*of\s*(\d+\.?\d*)',  # rating of 8.8
+                r'(\d+\.?\d*)\s*rating',  # 8.8 rating
+                r'(\d+\.?\d*)\s*average',  # 7.3 average
+                r'(\d+\.?\d*)\s*out\s*of\s*10',  # 8.8 out of 10
+            ]
+            for pattern in rating_patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    rating = float(match.group(1))
+                    # Normalize to 10-point scale
+                    if '/5' in pattern or 'out of 5' in pattern:
+                        return rating * 2
+                    elif '%' in pattern:
+                        return rating / 10
+                    else:
+                        return rating
+            return 0.0
+        
+        # Helper function to extract vote count
+        def extract_vote_count(text: str) -> int:
+            """Extract vote count from text patterns"""
+            vote_patterns = [
+                r'(\d+(?:,\d+)*)\s*votes?',
+                r'(\d+(?:,\d+)*)\s*ratings?',
+                r'based\s*on\s*(\d+(?:,\d+)*)',
+            ]
+            for pattern in vote_patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    return int(match.group(1).replace(',', ''))
+            return 0
+        
+        # Helper function to extract genres from text
+        def extract_genres_from_text(text: str) -> List[str]:
+            """Extract genre information from text patterns"""
+            # Common genre keywords to look for
+            genre_keywords = {
+                'action': 'Action',
+                'adventure': 'Adventure', 
+                'animation': 'Animation',
+                'comedy': 'Comedy',
+                'crime': 'Crime',
+                'documentary': 'Documentary',
+                'drama': 'Drama',
+                'family': 'Family',
+                'fantasy': 'Fantasy',
+                'history': 'History',
+                'horror': 'Horror',
+                'music': 'Music',
+                'mystery': 'Mystery',
+                'romance': 'Romance',
+                'science fiction': 'Science Fiction',
+                'sci-fi': 'Science Fiction',
+                'thriller': 'Thriller',
+                'war': 'War',
+                'western': 'Western',
+                'biography': 'Biography',
+                'sport': 'Sport',
+                'musical': 'Musical'
+            }
+            
+            text_lower = text.lower()
+            found_genres = []
+            
+            for keyword, genre_name in genre_keywords.items():
+                if keyword in text_lower:
+                    found_genres.append(genre_name)
+            
+            return found_genres[:3]  # Limit to 3 genres
+        
+        # Helper function to detect if text is about a movie/TV show
+        def is_media_content(text: str) -> bool:
+            """Check if text appears to be describing media content"""
+            media_keywords = [
+                'movie', 'film', 'show', 'series', 'tv', 'television',
+                'comedy', 'drama', 'action', 'horror', 'thriller', 'romance',
+                'director', 'actor', 'actress', 'cast', 'starring',
+                'rating', 'review', 'critics', 'audience', 'box office',
+                'release', 'premiere', 'streaming', 'plex', 'library',
+                'popular', 'acclaimed', 'award', 'oscar', 'emmy'
+            ]
+            text_lower = text.lower()
+            return any(keyword in text_lower for keyword in media_keywords)
+        
+        # Try to detect if this is a Plex search result
+        if "earliest" in text.lower() and "plex" in text.lower():
+            # This looks like a Plex search result - try to extract movie info
+            # Look for bold text with year in parentheses
+            movie_match = re.search(r'\*\*([^*]+)\s*\((\d{4})\)\*\*', text)
+            if movie_match:
+                title, year = movie_match.groups()
+                # Try to enrich with TMDb data
+                enriched_data = await self._enrich_movie_data(title, year)
+                if enriched_data:
+                    return MovieBotEmbeds.create_movie_embed(enriched_data)
+                else:
+                    # Fallback to basic data
+                    movie_data = {
+                        'title': title,
+                        'release_date': f"{year}-01-01",
+                        'overview': f"Found in your Plex library: {title} ({year})",
+                        'vote_average': 0,
+                        'id': 'plex-' + title.lower().replace(' ', '-')
+                    }
+                    return MovieBotEmbeds.create_movie_embed(movie_data)
+        
+        # Enhanced movie detection patterns - much more comprehensive
+        movie_patterns = [
+            # Pattern 1: "Movie Title (Year)" - most common format
+            r'["\']([^"\']+)["\']\s*\((\d{4})\)',
+            # Pattern 2: **Movie Title (Year)** - bold format
+            r'\*\*([^*]+)\s*\((\d{4})\)\*\*',
+            # Pattern 3: *Movie Title* + from + year - italic format
+            r'\*([^*]+)\*\s+.*?from\s+(\d{4})',
+            # Pattern 4: *Movie Title* + year - italic format (more general)
+            r'\*([^*]+)\*\s+.*?(\d{4})',
+            # Pattern 5: Movie Title (Year) - without quotes
+            r'(?:^|\s)([A-Z][A-Za-z\s&\-\'\.]+?)\s*\((\d{4})\)',
+            # Pattern 6: "Movie Title" (Year) - with quotes and space
+            r'["\']([^"\']+)["\']\s*\((\d{4})\)',
+            # Pattern 7: movie/film + title + year
+            r'(?:movie|film)\s+["\']?([^"\']+)["\']?\s*\((\d{4})\)',
+            # Pattern 8: title + year + movie/film
+            r'["\']?([^"\']+)["\']?\s*\((\d{4})\)\s*(?:movie|film)',
+            # Pattern 9: "Title" + released in + year
+            r'["\']([^"\']+)["\']\s+.*?released\s+in\s+(\d{4})',
+            # Pattern 10: Title + released in + year (no quotes)
+            r'(?:^|\s)([A-Z][A-Za-z\s&\-\'\.]+?)\s+.*?released\s+in\s+(\d{4})',
+            # Pattern 11: "Title" + year + film/movie
+            r'["\']([^"\']+)["\']\s+.*?(\d{4})\s+.*?(?:film|movie)',
+            # Pattern 12: Title + year + film/movie (no quotes)
+            r'(?:^|\s)([A-Z][A-Za-z\s&\-\'\.]+?)\s+.*?(\d{4})\s+.*?(?:film|movie)',
+        ]
+        
+        for pattern in movie_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                title, year = match.groups()
+                title = title.strip()
+                
+                # Skip if title is too short or contains common false positives
+                if len(title) < 2 or title.lower() in ['the', 'a', 'an', 'in', 'on', 'at', 'to', 'for']:
+                    continue
+                
+                # Extract additional metadata from the text
+                rating = extract_rating(text)
+                vote_count = extract_vote_count(text)
+                
+                # Try to enrich with TMDb data
+                enriched_data = await self._enrich_movie_data(title, year)
+                if enriched_data:
+                    # Update with extracted rating if found
+                    if rating > 0:
+                        enriched_data['vote_average'] = rating
+                    if vote_count > 0:
+                        enriched_data['vote_count'] = vote_count
+                    return MovieBotEmbeds.create_movie_embed(enriched_data)
+                else:
+                    # No TMDb data available - return None to fall back to default embed
+                    return None
+        
+        # Enhanced TV show detection patterns
+        tv_patterns = [
+            r'["\']([^"\']+)["\']\s*\((\d{4})\)\s*(?:show|series|tv)',
+            r'(?:show|series|tv)\s+["\']?([^"\']+)["\']?\s*\((\d{4})\)',
+            r'\*\*([^*]+)\s*\((\d{4})\)\*\*\s*(?:show|series)',
+        ]
+        
+        for pattern in tv_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                title, year = match.groups()
+                title = title.strip()
+                
+                if len(title) < 2:
+                    continue
+                
+                rating = extract_rating(text)
+                vote_count = extract_vote_count(text)
+                
+                # Try to enrich with TMDb data
+                enriched_data = await self._enrich_movie_data(title, year)
+                if enriched_data:
+                    # Convert movie data to TV format
+                    tv_data = {
+                        'name': enriched_data.get('title', title),
+                        'first_air_date': enriched_data.get('release_date', f"{year}-01-01"),
+                        'overview': enriched_data.get('overview', text[:500]),
+                        'vote_average': enriched_data.get('vote_average', rating),
+                        'vote_count': enriched_data.get('vote_count', vote_count),
+                        'id': enriched_data.get('id'),
+                        'genres': enriched_data.get('genres', [])
+                    }
+                    return MovieBotEmbeds.create_tv_embed(tv_data)
+                else:
+                    # No TMDb data available - return None to fall back to default embed
+                    return None
+        
+        # Try to detect search results
+        if "search results" in text.lower() or "found" in text.lower():
+            # Extract potential movie/TV titles from the text
+            titles = re.findall(r'["\']([^"\']+)["\']\s*\((\d{4})\)', text)
+            if titles:
+                # Create a search results embed
+                results = []
+                for title, year in titles[:5]:  # Limit to 5 results
+                    results.append({
+                        'title': title,
+                        'release_date': f"{year}-01-01",
+                        'vote_average': 0,
+                        'id': f"search-{len(results)}"
+                    })
+                return MovieBotEmbeds.create_search_results_embed(results, "Search Results", "movie")
+        
+        # Enhanced fallback: If text looks like media content but no specific pattern matched
+        if is_media_content(text) and not used_quick_path:
+            # Try to extract any title and year from the beginning of the text
+            fallback_match = re.search(r'["\']?([A-Z][A-Za-z\s&\-\'\.]{2,30})["\']?\s*\((\d{4})\)', text)
+            if fallback_match:
+                title, year = fallback_match.groups()
+                title = title.strip()
+                
+                rating = extract_rating(text)
+                vote_count = extract_vote_count(text)
+                
+                # Determine if it's likely a movie or TV show based on context
+                is_tv = any(keyword in text.lower() for keyword in ['show', 'series', 'tv', 'television', 'episode', 'season'])
+                
+                # Try to enrich with TMDb data
+                enriched_data = await self._enrich_movie_data(title, year)
+                if enriched_data:
+                    if is_tv:
+                        # Convert movie data to TV format
+                        tv_data = {
+                            'name': enriched_data.get('title', title),
+                            'first_air_date': enriched_data.get('release_date', f"{year}-01-01"),
+                            'overview': enriched_data.get('overview', text[:500]),
+                            'vote_average': enriched_data.get('vote_average', rating),
+                            'vote_count': enriched_data.get('vote_count', vote_count),
+                            'id': enriched_data.get('id'),
+                            'genres': enriched_data.get('genres', [])
+                        }
+                        return MovieBotEmbeds.create_tv_embed(tv_data)
+                    else:
+                        return MovieBotEmbeds.create_movie_embed(enriched_data)
+                else:
+                    # No TMDb data available - return None to fall back to default embed
+                    return None
+        
+        # Try to detect error messages
+        error_keywords = ['error', 'failed', 'not found', 'unable', 'cannot', 'sorry', 'unfortunately']
+        if any(keyword in text.lower() for keyword in error_keywords):
+            return MovieBotEmbeds.create_error_embed(
+                "Operation Failed",
+                text[:1000],
+                suggestion="Please check your request and try again."
+            )
+        
+        # Try to detect success messages
+        success_keywords = ['success', 'completed', 'added', 'updated', 'found', 'done', 'finished']
+        if any(keyword in text.lower() for keyword in success_keywords):
+            return MovieBotEmbeds.create_success_embed(
+                "Operation Successful",
+                text[:1000]
+            )
+        
+        # Default to a rich info embed
+        if used_quick_path:
+            return MovieBotEmbeds.create_success_embed(
+                "Quick Response",
+                text[:1000]
+            )
+        else:
+            return MovieBotEmbeds.create_success_embed(
+                "🎬 MovieBot Analysis",
+                text[:1000]
+            )
+
     async def _reply_llm_message(self, message: discord.Message) -> None:
         log = logging.getLogger("moviebot.bot")
         if not message.content:
@@ -747,25 +1069,8 @@ class MovieBotClient(discord.Client):
         CONVERSATIONS.add_assistant(conv_id, text)
         log.info("assistant reply", extra={"channel_id": conv_id, "content_preview": text[:120]})
         
-        # Create a rich embed for the response
-        if used_quick_path:
-            # Quick path responses get a simple embed
-            response_embed = discord.Embed(
-                title="MovieBot Response",
-                description=text[:1900],
-                color=MovieBotEmbeds.COLORS['info'],
-                timestamp=datetime.utcnow()
-            )
-            response_embed.set_footer(text="Quick Response", icon_url="https://cdn.discordapp.com/emojis/1234567890.png")
-        else:
-            # Agent responses get a more detailed embed
-            response_embed = discord.Embed(
-                title="🎬 MovieBot Analysis",
-                description=text[:1900],
-                color=MovieBotEmbeds.COLORS['plex'],
-                timestamp=datetime.utcnow()
-            )
-            response_embed.set_footer(text="AI-Powered Media Assistant", icon_url="https://cdn.discordapp.com/emojis/1234567890.png")
+        # Try to create a rich embed based on response content
+        response_embed = await self._create_smart_embed(text, used_quick_path)
         
         await message.reply(embed=response_embed, mention_author=False)
 
