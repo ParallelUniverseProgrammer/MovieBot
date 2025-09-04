@@ -91,6 +91,9 @@ class PerformanceBenchmarker:
         self.settings = load_settings(project_root)
         self.config = load_runtime_config(project_root)
         self.slow_threshold_ms = 1000.0
+        # Agent-specific thresholds (in milliseconds)
+        self.agent_simple_threshold_ms = 30000.0  # 30 seconds for simple queries
+        self.agent_complex_threshold_ms = 60000.0  # 1 minute for complex queries
         self._cleanup_tasks = []
         
     def create_suite(self, name: str) -> BenchmarkSuite:
@@ -98,6 +101,21 @@ class PerformanceBenchmarker:
         suite = BenchmarkSuite(name=name, iterations=self.iterations)
         self.suites[name] = suite
         return suite
+    
+    def is_agent_query_simple(self, query: str) -> bool:
+        """Determine if an agent query is simple based on complexity heuristics."""
+        word_count = len(query.split())
+        has_filters = any(word in query.lower() for word in ['with', 'above', 'below', 'from', 'to', 'that', 'similar'])
+        has_multiple_conditions = query.count('and') + query.count('but') + query.count('or') > 0
+        
+        return word_count <= 5 and not has_filters and not has_multiple_conditions
+    
+    def get_agent_threshold(self, query: str) -> float:
+        """Get the appropriate threshold for an agent query based on complexity."""
+        if self.is_agent_query_simple(query):
+            return self.agent_simple_threshold_ms
+        else:
+            return self.agent_complex_threshold_ms
     
     async def time_operation(self, operation_name: str, service: str, func, *args, **kwargs) -> BenchmarkResult:
         """Time a single operation and return the result."""
@@ -136,9 +154,17 @@ class PerformanceBenchmarker:
         status = "✅" if result.success else "❌"
         duration_str = f"{result.duration_ms:.1f}ms"
         
+        # Determine threshold based on service and query complexity
+        threshold = self.slow_threshold_ms
+        if result.service == "Agent" and "query" in result.metadata:
+            threshold = self.get_agent_threshold(result.metadata["query"])
+        
         # Add warning for slow operations
-        if result.success and result.duration_ms > self.slow_threshold_ms:
+        if result.success and result.duration_ms > threshold:
             duration_str += " ⚠️ SLOW"
+            if result.service == "Agent":
+                complexity = "simple" if self.is_agent_query_simple(result.metadata.get("query", "")) else "complex"
+                duration_str += f" (exceeds {complexity} agent threshold)"
         
         print(f"  {status} {result.operation}: {duration_str}")
         
@@ -163,9 +189,18 @@ class PerformanceBenchmarker:
             if stats['stdev_ms'] > 0:
                 print(f"  Variability: ±{stats['stdev_ms']:.1f}ms std dev")
             
+            # Determine appropriate threshold for this suite
+            threshold = self.slow_threshold_ms
+            if "Agent" in suite.name:
+                # For agent suites, use the higher threshold (complex queries)
+                threshold = self.agent_complex_threshold_ms
+            
             # Flag slow operations
-            if stats['mean_ms'] > self.slow_threshold_ms:
-                print(f"  ⚠️  WARNING: Average time exceeds {self.slow_threshold_ms}ms threshold")
+            if stats['mean_ms'] > threshold:
+                if "Agent" in suite.name:
+                    print(f"  ⚠️  WARNING: Average time exceeds {threshold/1000:.0f}s agent threshold")
+                else:
+                    print(f"  ⚠️  WARNING: Average time exceeds {threshold}ms threshold")
     
     async def run_benchmark_suite(self, suite_name: str, operations: List[Tuple[str, str, callable, tuple, dict]]) -> None:
         """Run a suite of benchmark operations."""
@@ -212,6 +247,9 @@ Examples:
   # Run with verbose output
   python scripts/benchmark_performance.py --verbose
   
+  # Run agent benchmarks with custom thresholds
+  python scripts/benchmark_performance.py --agent-only --agent-simple-threshold 45 --agent-complex-threshold 90
+  
   # Run specific service benchmarks
   python scripts/benchmark_performance.py --radarr-only --sonarr-only
         """
@@ -227,6 +265,8 @@ Examples:
     # Benchmark configuration
     parser.add_argument("--iterations", type=int, default=3, help="Number of iterations per test (default: 3)")
     parser.add_argument("--threshold", type=float, default=1000.0, help="Slow operation threshold in ms (default: 1000)")
+    parser.add_argument("--agent-simple-threshold", type=float, default=30.0, help="Agent simple query threshold in seconds (default: 30)")
+    parser.add_argument("--agent-complex-threshold", type=float, default=60.0, help="Agent complex query threshold in seconds (default: 60)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output with detailed metadata")
     
     # Test selection
@@ -849,6 +889,12 @@ async def benchmark_agent_query(benchmarker: PerformanceBenchmarker, query: str)
     error = None
     metadata = {}
     
+    # Determine timeout based on query complexity
+    is_simple = benchmarker.is_agent_query_simple(query)
+    timeout_seconds = 30 if is_simple else 60  # 30s for simple, 60s for complex queries
+    metadata["query_complexity"] = "simple" if is_simple else "complex"
+    metadata["timeout_seconds"] = timeout_seconds
+    
     try:
         # Run trace_agent.py as a subprocess
         trace_script = benchmarker.project_root / "scripts" / "trace_agent.py"
@@ -868,7 +914,7 @@ async def benchmark_agent_query(benchmarker: PerformanceBenchmarker, query: str)
             cwd=str(benchmarker.project_root),
             capture_output=True,
             text=True,
-            timeout=60  # 60 second timeout for agent queries
+            timeout=timeout_seconds
             )
             
             if result.returncode == 0:
@@ -894,7 +940,7 @@ async def benchmark_agent_query(benchmarker: PerformanceBenchmarker, query: str)
                 
     except subprocess.TimeoutExpired:
         success = False
-        error = "Agent query timed out after 60 seconds"
+        error = f"Agent query timed out after {timeout_seconds} seconds"
     except Exception as e:
         success = False
         error = str(e)
@@ -1401,7 +1447,12 @@ def print_final_summary(benchmarker: PerformanceBenchmarker) -> None:
             total_successes += stats['success_count']
             total_failures += stats['failure_count']
             
-            if 'mean_ms' in stats and stats['mean_ms'] > benchmarker.slow_threshold_ms:
+            # Use appropriate threshold based on suite type
+            threshold = benchmarker.slow_threshold_ms
+            if "Agent" in suite_name:
+                threshold = benchmarker.agent_complex_threshold_ms
+            
+            if 'mean_ms' in stats and stats['mean_ms'] > threshold:
                 slow_operations += 1
     
     print(f"Total Operations: {total_operations}")
@@ -1410,7 +1461,10 @@ def print_final_summary(benchmarker: PerformanceBenchmarker) -> None:
     print(f"Slow Suites (>={benchmarker.slow_threshold_ms}ms): {slow_operations}/{len(benchmarker.suites)}")
     
     if slow_operations > 0:
-        print(f"\n⚠️  WARNING: {slow_operations} benchmark suite(s) exceeded the {benchmarker.slow_threshold_ms}ms threshold")
+        print(f"\n⚠️  WARNING: {slow_operations} benchmark suite(s) exceeded their thresholds")
+        print(f"   - Standard threshold: {benchmarker.slow_threshold_ms}ms")
+        print(f"   - Agent simple queries: {benchmarker.agent_simple_threshold_ms/1000:.0f}s")
+        print(f"   - Agent complex queries: {benchmarker.agent_complex_threshold_ms/1000:.0f}s")
         print("   Consider investigating performance bottlenecks in these areas.")
     
     print("\nDetailed Results by Suite:")
@@ -1436,11 +1490,25 @@ async def main() -> int:
         print("❌ Error: Threshold must be non-negative")
         return 1
     
+    if args.agent_simple_threshold < 0:
+        print("❌ Error: Agent simple threshold must be non-negative")
+        return 1
+    
+    if args.agent_complex_threshold < 0:
+        print("❌ Error: Agent complex threshold must be non-negative")
+        return 1
+    
+    if args.agent_simple_threshold >= args.agent_complex_threshold:
+        print("❌ Error: Agent simple threshold must be less than complex threshold")
+        return 1
+    
     print("🎬 MovieBot Performance Benchmarking Tool")
     print("=" * 50)
     print(f"Project root: {_PROJECT_ROOT}")
     print(f"Iterations: {args.iterations}")
     print(f"Slow threshold: {args.threshold}ms")
+    print(f"Agent simple threshold: {args.agent_simple_threshold}s")
+    print(f"Agent complex threshold: {args.agent_complex_threshold}s")
     print(f"Verbose: {args.verbose}")
     
     # Initialize benchmarker
@@ -1450,6 +1518,8 @@ async def main() -> int:
         verbose=args.verbose
     )
     benchmarker.slow_threshold_ms = args.threshold
+    benchmarker.agent_simple_threshold_ms = args.agent_simple_threshold * 1000  # Convert to milliseconds
+    benchmarker.agent_complex_threshold_ms = args.agent_complex_threshold * 1000  # Convert to milliseconds
     
     # Determine which services to test
     test_plex = args.plex_only or not any(service_flags)
