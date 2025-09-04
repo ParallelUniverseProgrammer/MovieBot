@@ -428,17 +428,31 @@ class TMDbClient:
         return await self._get_json("GET", f"{self._base}/configuration", params={"api_key": self.api_key})
 
     async def _get_json(self, method: str, url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Internal helper to perform an HTTP request and parse JSON consistently, with error handling."""
+        """Internal helper to perform an HTTP request and parse JSON consistently, with enhanced error handling."""
         resp = await self._client.request(method, url, params=params)
         try:
-            # Basic error handling per TMDb v3; non-2xx should surface as errors
+            # Enhanced error handling per TMDb v3; non-2xx should surface as errors
             if getattr(resp, "status", 200) >= 400:
                 try:
                     txt = await resp.text()
                 except Exception:
                     txt = ""
-                # Include status code and snippet for diagnostics
-                raise RuntimeError(f"TMDb API error {resp.status}: {txt[:200]}")
+                
+                # Provide specific error messages for common TMDb API errors
+                status = resp.status
+                if status == 401:
+                    raise RuntimeError(f"TMDb API authentication failed (401): Invalid API key. Check your TMDb API key configuration.")
+                elif status == 404:
+                    raise RuntimeError(f"TMDb API resource not found (404): {txt[:200]}")
+                elif status == 429:
+                    raise RuntimeError(f"TMDb API rate limit exceeded (429): Too many requests. Please wait before retrying.")
+                elif status == 422:
+                    raise RuntimeError(f"TMDb API validation error (422): Invalid request parameters. {txt[:200]}")
+                elif status >= 500:
+                    raise RuntimeError(f"TMDb API server error ({status}): {txt[:200]}")
+                else:
+                    # Generic error for other 4xx codes
+                    raise RuntimeError(f"TMDb API error {status}: {txt[:200]}")
             data = await resp.json()
             return data
         finally:

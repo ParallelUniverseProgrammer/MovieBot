@@ -8,15 +8,15 @@ sonarr:
   rootFolderPath: "D:\\TV"
 llm:
   agentMaxIters: 6
-  workerMaxIters: 4
+  workerMaxIters: 3
   providers:
     priority: [openai, openrouter]
     openai:
       chat:
-        model: gpt-5-mini
-        reasoningEffort: minimal
+        model: gpt-4.1-mini
+        #reasoningEffort: minimal
         params:
-          temperature: 1
+          temperature: 0.7
           tool_choice: auto
       smart:
         model: gpt-5
@@ -26,16 +26,16 @@ llm:
           tool_choice: auto
       worker:
         model: gpt-5-mini
-        reasoningEffort: medium
+        reasoningEffort: minimal
         params:
           temperature: 1
           tool_choice: auto
       quick:
-        model: gpt-4.1-nano
+        model: gpt-4.1-mini
         params:
           max_tokens: 180
       summarizer:
-        model: gpt-4.1-nano
+        model: gpt-4.1-mini
         #reasoningEffort: minimal
         params:
           max_tokens: 300
@@ -46,16 +46,16 @@ llm:
       worker: z-ai/glm-4.5-air:free
 tools:
   timeoutMs: 1500
-  parallelism: 12
+  parallelism: 16
   retryMax: 2
   backoffBaseMs: 50
   listMaxItems: 12
   # Optional advanced tuning (used by Agent if present)
   familyParallelism:
-    tmdb: 16
-    plex: 4
-    radarr: 6
-    sonarr: 6
+    tmdb: 20
+    plex: 6
+    radarr: 8
+    sonarr: 8
   perFamily:
     tmdb:
       timeoutMs: 2500
@@ -65,9 +65,9 @@ tools:
     tmdb_search:
       timeoutMs: 2000
     smart_recommendations:
-      timeoutMs: 8000
+      timeoutMs: 5000
     intelligent_search:
-      timeoutMs: 8000
+      timeoutMs: 3000
   hedgeDelayMsByFamily:
     tmdb: 150
   listMaxItemsByFamily:

@@ -127,13 +127,27 @@ class SharedHttpClient:
                 resp = await self._session.request(method, url, params=params, json=json, headers=headers)
                 duration_ms = int((time.time() - t0) * 1000)
                 status = resp.status
-                # Retry on 429/5xx for idempotent methods
-                if method.upper() in allow_retry_on_methods and status in (429, 500, 502, 503, 504):
+                # Enhanced retry logic for various error conditions
+                should_retry = False
+                if method.upper() in allow_retry_on_methods:
+                    # Retry on rate limits, server errors, and timeouts
+                    if status in (408, 429, 500, 502, 503, 504):
+                        should_retry = True
+                    # Also retry on 502/503 for non-idempotent methods (common with load balancers)
+                    elif status in (502, 503) and method.upper() in ("POST", "PUT", "PATCH"):
+                        should_retry = True
+                
+                if should_retry:
                     body = await resp.text()
                     self._log_req(method, url, status, duration_ms, attempt, retried=True)
                     resp.release()
                     if attempt < self._cfg.retry_max:
-                        await asyncio.sleep(self._backoff(attempt))
+                        # Use longer backoff for rate limits
+                        backoff_delay = self._backoff(attempt)
+                        if status == 429:
+                            # Rate limit backoff - use longer delay
+                            backoff_delay = min(backoff_delay * 2, 10.0)  # Cap at 10 seconds
+                        await asyncio.sleep(backoff_delay)
                         attempt += 1
                         continue
                     raise aiohttp.ClientResponseError(resp.request_info, resp.history, status=status, message=body)

@@ -375,6 +375,8 @@ async def run_plex_benchmarks(benchmarker: PerformanceBenchmarker, args) -> None
 
 async def run_plex_parallel_comparison(benchmarker: PerformanceBenchmarker, plex_client) -> None:
     """Compare sequential vs parallel Plex operations."""
+    from integrations.plex_client import ResponseLevel
+    
     print("\n🔄 Running Plex Sequential vs Parallel Comparison...")
     
     # Define operations to test
@@ -451,28 +453,28 @@ async def run_radarr_benchmarks(benchmarker: PerformanceBenchmarker, args) -> No
         if not args.skip_connectivity:
             connectivity_ops = [
                 ("System Status", "Radarr", radarr_client.system_status, (), {}),
-                ("Quality Profiles", "Radarr", radarr_client.get_quality_profiles, (), {}),
-                ("Root Folders", "Radarr", radarr_client.get_root_folders, (), {}),
+                ("Quality Profiles", "Radarr", radarr_client.quality_profiles, (), {}),
+                ("Root Folders", "Radarr", radarr_client.root_folders, (), {}),
             ]
             await benchmarker.run_benchmark_suite("Radarr Connectivity", connectivity_ops)
         
         # Movie management operations (read-only)
         if not args.skip_search:
             search_ops = [
-                ("Get All Movies", "Radarr", radarr_client.get_movies),
-                ("Get Movie Queue", "Radarr", radarr_client.get_queue),
-                ("Get Movie History", "Radarr", radarr_client.get_history, (), {"limit": 10}),
-                ("Get Wanted Missing", "Radarr", radarr_client.get_wanted_missing, (), {"limit": 10}),
+                ("Get All Movies", "Radarr", radarr_client.get_movies, (), {}),
+                ("Get Movie Queue", "Radarr", radarr_client.get_queue, (), {}),
+                ("Get Movie History", "Radarr", radarr_client.get_history, (), {"page_size": 10}),
+                ("Get Wanted Missing", "Radarr", radarr_client.get_wanted, (), {"page_size": 10}),
             ]
             await benchmarker.run_benchmark_suite("Radarr Movie Operations", search_ops)
         
         # Metadata and configuration operations
         if not args.skip_metadata:
             metadata_ops = [
-                ("Get Indexers", "Radarr", radarr_client.get_indexers),
-                ("Get Download Clients", "Radarr", radarr_client.get_download_clients),
-                ("Get Notifications", "Radarr", radarr_client.get_notifications),
-                ("Get Tags", "Radarr", radarr_client.get_tags),
+                ("Get Indexers", "Radarr", radarr_client.get_indexers, (), {}),
+                ("Get Download Clients", "Radarr", radarr_client.get_download_clients, (), {}),
+                ("Get Notifications", "Radarr", radarr_client.get_notifications, (), {}),
+                ("Get Tags", "Radarr", radarr_client.get_tags, (), {}),
             ]
             await benchmarker.run_benchmark_suite("Radarr Configuration", metadata_ops)
         
@@ -498,18 +500,18 @@ async def run_radarr_parallel_comparison(benchmarker: PerformanceBenchmarker, ra
     
     # Define operations to test
     operations = [
-        ("System Status", radarr_client.system_status),
-        ("Quality Profiles", radarr_client.get_quality_profiles),
-        ("Root Folders", radarr_client.get_root_folders),
-        ("Get Movies", radarr_client.get_movies),
+        ("System Status", radarr_client.system_status, (), {}),
+        ("Quality Profiles", radarr_client.quality_profiles, (), {}),
+        ("Root Folders", radarr_client.root_folders, (), {}),
+        ("Get Movies", radarr_client.get_movies, (), {}),
     ]
     
     # Sequential execution
     suite = benchmarker.create_suite("Radarr Sequential Operations")
     start_time = time.perf_counter()
     
-    for op_name, func in operations:
-        result = await benchmarker.time_operation(op_name, "Radarr", func)
+    for op_name, func, args, kwargs in operations:
+        result = await benchmarker.time_operation(op_name, "Radarr", func, *args, **kwargs)
         suite.add_result(result)
         benchmarker.print_result(result)
     
@@ -519,10 +521,10 @@ async def run_radarr_parallel_comparison(benchmarker: PerformanceBenchmarker, ra
     suite = benchmarker.create_suite("Radarr Parallel Operations")
     start_time = time.perf_counter()
     
-    async def run_operation(op_name, func):
-        return await benchmarker.time_operation(op_name, "Radarr", func)
+    async def run_operation(op_name, func, args, kwargs):
+        return await benchmarker.time_operation(op_name, "Radarr", func, *args, **kwargs)
     
-    tasks = [run_operation(op_name, func) for op_name, func in operations]
+    tasks = [run_operation(op_name, func, args, kwargs) for op_name, func, args, kwargs in operations]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     parallel_time = (time.perf_counter() - start_time) * 1000
@@ -570,28 +572,28 @@ async def run_sonarr_benchmarks(benchmarker: PerformanceBenchmarker, args) -> No
         if not args.skip_connectivity:
             connectivity_ops = [
                 ("System Status", "Sonarr", sonarr_client.system_status, (), {}),
-                ("Quality Profiles", "Sonarr", sonarr_client.get_quality_profiles, (), {}),
-                ("Root Folders", "Sonarr", sonarr_client.get_root_folders, (), {}),
+                ("Quality Profiles", "Sonarr", sonarr_client.quality_profiles, (), {}),
+                ("Root Folders", "Sonarr", sonarr_client.root_folders, (), {}),
             ]
             await benchmarker.run_benchmark_suite("Sonarr Connectivity", connectivity_ops)
         
         # TV show management operations (read-only)
         if not args.skip_search:
             search_ops = [
-                ("Get All Series", "Sonarr", sonarr_client.get_series),
-                ("Get Episode Queue", "Sonarr", sonarr_client.get_queue),
-                ("Get Episode History", "Sonarr", sonarr_client.get_history, (), {"limit": 10}),
-                ("Get Wanted Missing", "Sonarr", sonarr_client.get_wanted_missing, (), {"limit": 10}),
+                ("Get All Series", "Sonarr", sonarr_client.get_series, (), {}),
+                ("Get Episode Queue", "Sonarr", sonarr_client.get_queue, (), {}),
+                ("Get Episode History", "Sonarr", sonarr_client.get_history, (), {"page_size": 10}),
+                ("Get Wanted Missing", "Sonarr", sonarr_client.get_wanted, (), {"page_size": 10}),
             ]
             await benchmarker.run_benchmark_suite("Sonarr Series Operations", search_ops)
         
         # Metadata and configuration operations
         if not args.skip_metadata:
             metadata_ops = [
-                ("Get Indexers", "Sonarr", sonarr_client.get_indexers),
-                ("Get Download Clients", "Sonarr", sonarr_client.get_download_clients),
-                ("Get Notifications", "Sonarr", sonarr_client.get_notifications),
-                ("Get Tags", "Sonarr", sonarr_client.get_tags),
+                ("Get Import Lists", "Sonarr", sonarr_client.get_import_lists, (), {}),
+                ("Get Notifications", "Sonarr", sonarr_client.get_notifications, (), {}),
+                ("Get Tags", "Sonarr", sonarr_client.get_tags, (), {}),
+                ("Get Calendar", "Sonarr", sonarr_client.get_calendar, (), {}),
             ]
             await benchmarker.run_benchmark_suite("Sonarr Configuration", metadata_ops)
         
@@ -617,18 +619,18 @@ async def run_sonarr_parallel_comparison(benchmarker: PerformanceBenchmarker, so
     
     # Define operations to test
     operations = [
-        ("System Status", sonarr_client.system_status),
-        ("Quality Profiles", sonarr_client.get_quality_profiles),
-        ("Root Folders", sonarr_client.get_root_folders),
-        ("Get Series", sonarr_client.get_series),
+        ("System Status", sonarr_client.system_status, (), {}),
+        ("Quality Profiles", sonarr_client.quality_profiles, (), {}),
+        ("Root Folders", sonarr_client.root_folders, (), {}),
+        ("Get Series", sonarr_client.get_series, (), {}),
     ]
     
     # Sequential execution
     suite = benchmarker.create_suite("Sonarr Sequential Operations")
     start_time = time.perf_counter()
     
-    for op_name, func in operations:
-        result = await benchmarker.time_operation(op_name, "Sonarr", func)
+    for op_name, func, args, kwargs in operations:
+        result = await benchmarker.time_operation(op_name, "Sonarr", func, *args, **kwargs)
         suite.add_result(result)
         benchmarker.print_result(result)
     
@@ -638,10 +640,10 @@ async def run_sonarr_parallel_comparison(benchmarker: PerformanceBenchmarker, so
     suite = benchmarker.create_suite("Sonarr Parallel Operations")
     start_time = time.perf_counter()
     
-    async def run_operation(op_name, func):
-        return await benchmarker.time_operation(op_name, "Sonarr", func)
+    async def run_operation(op_name, func, args, kwargs):
+        return await benchmarker.time_operation(op_name, "Sonarr", func, *args, **kwargs)
     
-    tasks = [run_operation(op_name, func) for op_name, func in operations]
+    tasks = [run_operation(op_name, func, args, kwargs) for op_name, func, args, kwargs in operations]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     parallel_time = (time.perf_counter() - start_time) * 1000

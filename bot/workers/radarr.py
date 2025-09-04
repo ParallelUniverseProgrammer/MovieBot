@@ -59,6 +59,17 @@ class RadarrWorker:
             monitored=self._coerce_bool(monitored, True),
             search_now=self._coerce_bool(search_now, True),
         )
+        
+        # If the movie already exists, return a user-friendly response
+        if data.get("already_exists"):
+            return {
+                "success": True,
+                "already_exists": True,
+                "message": data.get("message", f"Movie with TMDb ID {tmdb_id} already exists in Radarr"),
+                "movie": data,
+                "tmdb_id": tmdb_id
+            }
+        
         return data
 
     async def get_movies(self, *, movie_id: Optional[int] = None) -> Dict[str, Any]:

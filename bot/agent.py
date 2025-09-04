@@ -36,7 +36,7 @@ class Agent:
             self.progress = None  # Fallback; progress is best-effort
         # Per-instance caches/state
         self._role_selection_cache: Dict[str, Dict[str, Any]] = {}
-        self._circuit: Dict[str, Dict[str, int]] = {}
+        self._circuit: Dict[str, Dict[str, Any]] = {}
         self._tuning_cfg: Dict[str, Any] = {}
 
     def _get_role_selection(self, role: str) -> Dict[str, Any]:
@@ -304,6 +304,91 @@ class Agent:
             pass
         return False
 
+    def _is_circuit_open(self, tool_name: str) -> bool:
+        """Check if the circuit breaker is open for a specific tool."""
+        try:
+            circuit_config = self._tuning_cfg.get("tools_cfg", {}).get("circuit", {})
+            open_after_failures = circuit_config.get("openAfterFailures", 3)
+            open_for_ms = circuit_config.get("openForMs", 3000)
+            
+            if tool_name not in self._circuit:
+                return False
+            
+            circuit_state = self._circuit[tool_name]
+            failure_count = circuit_state.get("failures", 0)
+            last_failure_time = circuit_state.get("last_failure", 0)
+            
+            if failure_count >= open_after_failures:
+                # Check if enough time has passed to reset the circuit
+                import time
+                current_time = time.time() * 1000  # Convert to milliseconds
+                if current_time - last_failure_time > open_for_ms:
+                    # Reset circuit
+                    self._circuit[tool_name] = {"failures": 0, "last_failure": 0}
+                    return False
+                return True
+            
+            return False
+        except Exception:
+            return False
+
+    def _record_circuit_failure(self, tool_name: str) -> None:
+        """Record a failure for circuit breaker tracking."""
+        try:
+            import time
+            current_time = time.time() * 1000  # Convert to milliseconds
+            
+            if tool_name not in self._circuit:
+                self._circuit[tool_name] = {"failures": 0, "last_failure": 0}
+            
+            self._circuit[tool_name]["failures"] += 1
+            self._circuit[tool_name]["last_failure"] = current_time
+        except Exception:
+            pass
+
+    def _record_circuit_success(self, tool_name: str) -> None:
+        """Record a success to reset circuit breaker for a tool."""
+        try:
+            if tool_name in self._circuit:
+                self._circuit[tool_name] = {"failures": 0, "last_failure": 0}
+        except Exception:
+            pass
+
+    def _classify_error_retryability(self, error: Exception) -> str:
+        """Classify errors as retryable, non_retryable, or circuit_breaker."""
+        try:
+            error_str = str(error).lower()
+            
+            # Non-retryable errors (permanent failures)
+            if any(x in error_str for x in [
+                "401", "unauthorized", "authentication", "invalid api key",
+                "403", "forbidden", "permission denied", "access denied",
+                "404", "not found", "does not exist",
+                "400", "bad request", "validation", "invalid parameter",
+                "movie already exists", "series already exists", "already been added"
+            ]):
+                return "non_retryable"
+            
+            # Circuit breaker triggers (rate limits, service overload)
+            if any(x in error_str for x in [
+                "429", "rate limit", "too many requests", "quota exceeded",
+                "503", "service unavailable", "server overloaded",
+                "502", "bad gateway", "upstream error"
+            ]):
+                return "circuit_breaker"
+            
+            # Retryable errors (temporary failures)
+            if any(x in error_str for x in [
+                "timeout", "connection", "network", "dns",
+                "500", "internal server error", "temporary"
+            ]):
+                return "retryable"
+            
+            # Default to retryable for unknown errors
+            return "retryable"
+        except Exception:
+            return "retryable"
+
     def _contains_write_success(self, flat_results: List[tuple]) -> bool:
         """Detect if any write-style tool succeeded in the last batch."""
         try:
@@ -477,12 +562,12 @@ class Agent:
             validation_planned_this_iter = False
             if require_validation_read or (write_completed and not validation_done):
                 ro_calls = [tc for tc in tool_calls if not self._is_write_tool_name(getattr(getattr(tc, 'function', None), 'name', ''))]
-                # Cap validation to a single quick read-only call
-                tool_calls = ro_calls[:1]
+                # Allow parallel validation calls for better performance
+                tool_calls = ro_calls
                 await self._emit_progress("phase.validation", {"iteration": f"{iter_idx+1}/{iters}"})
                 messages.append({
                     "role": "system",
-                    "content": "Validation step: run exactly one quick read-only check (e.g., fetch the item/list) to confirm the write succeeded. Do not perform any write operations. Then finalize."
+                    "content": "Validation step: run quick read-only checks (e.g., fetch the item/list) to confirm the write succeeded. You may run multiple validation calls in parallel. Do not perform any write operations. Then finalize."
                 })
                 if tool_calls:
                     validation_planned_this_iter = True
@@ -546,36 +631,13 @@ class Agent:
                     flattened_results.extend(result)
                 else:
                     flattened_results.append(result)
-            # Determine max items to keep in summaries and cache TTL
-            list_max_default = int(self._tuning_cfg.get("list_max_default", 5))
-            cache_ttl_sec = int(self._tuning_cfg.get("cache_ttl_short", 60))
+            
+            # Process results asynchronously for better performance
+            processed_messages = await self._process_results_async(flattened_results)
+            messages.extend(processed_messages)
+            
+            # Track last write attempt details for validation matching
             for tool_call_id, name, result, attempts, cache_hit in flattened_results:
-                # Store raw result and attach ref_id for on-demand detail fetching
-                ref_id = None
-                try:
-                    ref_id = put_tool_result(result, cache_ttl_sec)
-                except Exception:
-                    ref_id = None
-
-                # Summarize and minify tool output before appending
-                try:
-                    # If result set is very small (<=2), preserve raw fields (truncated) instead of lossy summary
-                    preserved = self._preserve_raw_if_small(result, max_keep=2)
-                    fam = self._classify_tool_family(name)
-                    fam_budgets = (self._tuning_cfg.get("tools_cfg", {}).get("listMaxItemsByFamily", {}) or {})
-                    list_max_items = int(fam_budgets.get(fam, list_max_default))
-                    summarized = preserved if preserved is not None else summarize_tool_result(name, result, max_items=list_max_items)
-                except Exception:
-                    summarized = result
-
-                payload = {"ref_id": ref_id, "summary": summarized}
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "name": name,
-                    "content": json.dumps(payload, separators=(",", ":")),
-                })
-                # Track last write attempt details for validation matching
                 try:
                     if self._is_write_tool_name(str(name)) and isinstance(result, dict):
                         if "radarr_add_movie" in str(name):
@@ -737,46 +799,85 @@ class Agent:
         return synthesized  # type: ignore[return-value]
 
     def _group_tool_calls_for_batching(self, tool_calls: List[Any]) -> List[Any]:
-        """Group tool calls by type for potential batching.
+        """Enhanced batching strategy with smart grouping and performance optimization.
+        
+        This method implements intelligent batching based on:
+        1. Tool family characteristics (TMDb is fast, *arr is slower)
+        2. Operation type (reads vs writes)
+        3. Optimal batch sizes per family
+        4. Cross-family batching opportunities
         
         Returns a list where each element is either a single tool call or a list of tool calls
         that can be executed as a batch.
         """
-        # Group by tool name and similar parameters for potential batching
-        tool_groups = {}
+        if not tool_calls:
+            return []
+        
+        # Categorize tools by family and operation type
+        fast_tools = []      # TMDb, quick Plex operations
+        medium_tools = []    # Plex searches, *arr reads
+        slow_tools = []      # *arr writes, complex operations
+        write_tools = []     # Any write operations
         
         for tc in tool_calls:
             name = tc.function.name
-            args = tc.function.arguments or "{}"
+            family = self._classify_tool_family(name)
             
-            # Create a key for grouping based on tool name and similar parameters
-            if name.startswith("tmdb_"):
-                # Group TMDB calls by type (search, details, etc.)
-                group_key = f"tmdb_{name.split('_', 1)[1]}"
-            elif name.startswith("plex_"):
-                # Group Plex calls by type
-                group_key = f"plex_{name.split('_', 1)[1]}"
-            elif name.startswith("radarr_") or name.startswith("sonarr_"):
-                # Group Radarr/Sonarr calls by type
-                group_key = f"{name.split('_', 1)[0]}_{name.split('_', 1)[1]}"
+            # Categorize by performance characteristics
+            if family == "tmdb":
+                fast_tools.append(tc)
+            elif family == "plex":
+                if any(op in name for op in ["search", "get_", "recently_added", "on_deck"]):
+                    fast_tools.append(tc)
+                else:
+                    medium_tools.append(tc)
+            elif family in ["radarr", "sonarr"]:
+                if "get_" in name or "system_status" in name:
+                    medium_tools.append(tc)
+                else:
+                    slow_tools.append(tc)
             else:
-                # Keep other tools as single executions
-                group_key = name
+                medium_tools.append(tc)
             
-            if group_key not in tool_groups:
-                tool_groups[group_key] = []
-            tool_groups[group_key].append(tc)
+            # Track write operations separately
+            if self._is_write_tool_name(name):
+                write_tools.append(tc)
         
-        # Convert to list format, keeping single tools as-is and grouping similar ones
+        # Create optimized batches
         result = []
-        for group_key, tools in tool_groups.items():
-            if len(tools) == 1:
-                result.append(tools[0])  # Single tool
-            elif len(tools) > 1 and self._can_batch_tools(tools):
-                result.append(tools)  # Batchable group
-            else:
-                # Can't batch, add individually
-                result.extend(tools)
+        
+        # Batch fast tools aggressively (up to 8 per batch)
+        if fast_tools:
+            for i in range(0, len(fast_tools), 8):
+                batch = fast_tools[i:i+8]
+                if len(batch) > 1:
+                    result.append(batch)
+                else:
+                    result.append(batch[0])
+        
+        # Batch medium tools moderately (up to 4 per batch)
+        if medium_tools:
+            for i in range(0, len(medium_tools), 4):
+                batch = medium_tools[i:i+4]
+                if len(batch) > 1:
+                    result.append(batch)
+                else:
+                    result.append(batch[0])
+        
+        # Keep slow tools individual or small batches (up to 2 per batch)
+        if slow_tools:
+            for i in range(0, len(slow_tools), 2):
+                batch = slow_tools[i:i+2]
+                if len(batch) > 1:
+                    result.append(batch)
+                else:
+                    result.append(batch[0])
+        
+        # Special handling for write operations - keep them separate for safety
+        if write_tools:
+            # Remove write tools from other batches and add them individually
+            result = [batch for batch in result if not any(self._is_write_tool_name(tc.function.name) for tc in (batch if isinstance(batch, list) else [batch]))]
+            result.extend(write_tools)
         
         return result
 
@@ -851,6 +952,13 @@ class Agent:
                 raise e
 
         while True:
+            # Check circuit breaker before attempting
+            if self._is_circuit_open(name):
+                last_err = {"ok": False, "error": "circuit_breaker_open", "name": name, "message": "Circuit breaker is open for this tool"}
+                result = last_err
+                status = "error"
+                break
+                
             try:
                 # Hedged attempt for read-only TMDB-like tools
                 is_read_only = not self._is_write_tool_name(name)
@@ -869,11 +977,30 @@ class Agent:
                 else:
                     result = await attempt_once()
                 status = "ok"
+                # Record success to reset circuit breaker
+                self._record_circuit_success(name)
                 break
             except asyncio.TimeoutError as e:
                 last_err = {"ok": False, "error": "timeout", "timeout_ms": timeout_ms, "name": name}
+                error_classification = "retryable"  # Timeouts are retryable
             except Exception as e:
                 last_err = {"ok": False, "error": str(e)}
+                error_classification = self._classify_error_retryability(e)
+            
+            # Record failure for circuit breaker
+            self._record_circuit_failure(name)
+            
+            # Check if we should retry based on error classification
+            if error_classification == "non_retryable":
+                result = last_err
+                status = "error"
+                break
+            elif error_classification == "circuit_breaker":
+                # For circuit breaker errors, don't retry immediately
+                result = last_err
+                status = "error"
+                break
+            
             if attempt >= retry_max:
                 result = last_err
                 status = "error"
@@ -892,24 +1019,66 @@ class Agent:
         return tc.id, name, result, attempt + 1, cache_hit
 
     async def _execute_tool_batch(self, tool_batch: List[Any], timeout_ms: int, retry_max: int, backoff_base_ms: int, dedup_cache: Optional[Dict[str, Any]] = None) -> List[tuple]:
-        """Execute a batch of similar tools concurrently with per-family parallelism cap."""
+        """Execute a batch of similar tools concurrently with enhanced parallelism control."""
         if not tool_batch:
             return []
-        # Per-family semaphore
+        
+        # Enhanced parallelism control based on tool characteristics
         first = tool_batch[0]
         fam = self._classify_tool_family(first.function.name)
-        max_parallelism = self._select_parallelism_for_family(fam)
+        
+        # Dynamic parallelism based on family and batch size
+        if fam == "tmdb":
+            # TMDb is fast, allow higher parallelism
+            max_parallelism = min(len(tool_batch), 16)
+        elif fam == "plex":
+            # Plex is moderate, use family setting
+            max_parallelism = self._select_parallelism_for_family(fam)
+            max_parallelism = min(max_parallelism, len(tool_batch))
+        elif fam in ["radarr", "sonarr"]:
+            # *arr tools are slower, be more conservative
+            max_parallelism = min(self._select_parallelism_for_family(fam), len(tool_batch), 4)
+        else:
+            max_parallelism = min(self._select_parallelism_for_family(fam), len(tool_batch))
+        
         if max_parallelism <= 0:
             max_parallelism = len(tool_batch)
+        
         sem = asyncio.Semaphore(max_parallelism)
 
         async def _sem_wrap(one):
             async with sem:
                 return await self._execute_single_tool(one, timeout_ms, retry_max, backoff_base_ms, dedup_cache)
 
-        batch_results = await asyncio.gather(*[_sem_wrap(tc) for tc in tool_batch])
-
-        return batch_results
+        # Execute with enhanced error handling and progress tracking
+        try:
+            batch_results = await asyncio.gather(*[_sem_wrap(tc) for tc in tool_batch], return_exceptions=True)
+            
+            # Handle any exceptions in batch results
+            processed_results = []
+            for i, result in enumerate(batch_results):
+                if isinstance(result, Exception):
+                    # Convert exception to error result tuple
+                    tool_call = tool_batch[i]
+                    error_result = (tool_call.id, tool_call.function.name, {"error": str(result)}, 1, False)
+                    processed_results.append(error_result)
+                else:
+                    processed_results.append(result)
+            
+            return processed_results
+            
+        except Exception as e:
+            # Fallback: execute tools individually if batch fails
+            self.log.warning(f"Batch execution failed, falling back to individual execution: {e}")
+            individual_results = []
+            for tc in tool_batch:
+                try:
+                    result = await self._execute_single_tool(tc, timeout_ms, retry_max, backoff_base_ms, dedup_cache)
+                    individual_results.append(result)
+                except Exception as individual_error:
+                    error_result = (tc.id, tc.function.name, {"error": str(individual_error)}, 1, False)
+                    individual_results.append(error_result)
+            return individual_results
 
     async def _arun_tools_loop(self, base_messages: List[Dict[str, Any]], model: str, role: str, max_iters: int | None = None, stream_final_to_callback: Optional[Callable[[str], Any]] = None) -> Any:
         """Async version of _run_tools_loop for non-blocking operations."""
@@ -1126,31 +1295,9 @@ class Agent:
                     flattened_results.append(result)
             total_tool_calls += len(flattened_results)
             
-            # Determine max items to keep in summaries and cache TTL
-            list_max_default = int(self._tuning_cfg.get("list_max_default", 5))
-            cache_ttl_sec = int(self._tuning_cfg.get("cache_ttl_short", 60))
-            for tool_call_id, name, result, attempts, cache_hit in flattened_results:
-                ref_id = None
-                try:
-                    ref_id = put_tool_result(result, cache_ttl_sec)
-                except Exception:
-                    ref_id = None
-
-                try:
-                    preserved = self._preserve_raw_if_small(result, max_keep=2)
-                    fam = self._classify_tool_family(name)
-                    fam_budgets = (self._tuning_cfg.get("tools_cfg", {}).get("listMaxItemsByFamily", {}) or {})
-                    list_max_items = int(fam_budgets.get(fam, list_max_default))
-                    summarized = preserved if preserved is not None else summarize_tool_result(name, result, max_items=list_max_items)
-                except Exception:
-                    summarized = result
-                payload = {"ref_id": ref_id, "summary": summarized}
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "name": name,
-                    "content": json.dumps(payload, separators=(",", ":")),
-                })
+            # Process results asynchronously for better performance
+            processed_messages = await self._process_results_async(flattened_results)
+            messages.extend(processed_messages)
             # Post-write validation planning and finalize gating (mirrors sync path)
             write_success = self._contains_write_success(flattened_results)
             write_failure = self._contains_write_failure(flattened_results)
@@ -1370,6 +1517,56 @@ class Agent:
         _, sel = resolve_llm_selection(self.project_root, "smart")
         model = sel.get("model", "gpt-5")
         return await self._arun_tools_loop(messages, model=model, role="smart")
+
+    async def _process_results_async(self, flattened_results: List[tuple]) -> List[Dict[str, Any]]:
+        """Process tool results asynchronously for better performance.
+        
+        This method replaces the sequential result processing loop with concurrent
+        processing of cache operations, summarization, and JSON serialization.
+        """
+        if not flattened_results:
+            return []
+        
+        # Determine max items to keep in summaries and cache TTL
+        list_max_default = int(self._tuning_cfg.get("list_max_default", 5))
+        cache_ttl_sec = int(self._tuning_cfg.get("cache_ttl_short", 60))
+        
+        async def process_single_result(tool_call_id, name, result, attempts, cache_hit):
+            """Process a single tool result asynchronously."""
+            # Store raw result and attach ref_id for on-demand detail fetching
+            ref_id = None
+            try:
+                ref_id = await asyncio.to_thread(put_tool_result, result, cache_ttl_sec)
+            except Exception:
+                ref_id = None
+
+            # Summarize and minify tool output
+            try:
+                # If result set is very small (<=2), preserve raw fields (truncated) instead of lossy summary
+                preserved = self._preserve_raw_if_small(result, max_keep=2)
+                fam = self._classify_tool_family(name)
+                fam_budgets = (self._tuning_cfg.get("tools_cfg", {}).get("listMaxItemsByFamily", {}) or {})
+                list_max_items = int(fam_budgets.get(fam, list_max_default))
+                summarized = preserved if preserved is not None else summarize_tool_result(name, result, max_items=list_max_items)
+            except Exception:
+                summarized = result
+
+            # Create payload and serialize JSON asynchronously
+            payload = {"ref_id": ref_id, "summary": summarized}
+            content = await asyncio.to_thread(json.dumps, payload, separators=(",", ":"))
+            
+            return {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "name": name,
+                "content": content,
+            }
+        
+        # Process all results concurrently
+        tasks = [process_single_result(*result) for result in flattened_results]
+        processed_messages = await asyncio.gather(*tasks)
+        
+        return processed_messages
 
     async def aclose(self) -> None:
         """Close background tasks and shared network clients."""

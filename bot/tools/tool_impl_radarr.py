@@ -20,13 +20,25 @@ def make_radarr_add_movie(project_root: Path) -> Callable[[dict], Awaitable[dict
     worker = RadarrWorker(project_root)
 
     async def impl(args: dict) -> dict:
-        return await worker.add_movie(
+        result = await worker.add_movie(
             tmdb_id=int(args["tmdb_id"]),
             quality_profile_id=args.get("quality_profile_id"),
             root_folder_path=args.get("root_folder_path"),
             monitored=args.get("monitored", True),
             search_now=args.get("search_now", True),
         )
+        
+        # If movie already exists, return a clear success response
+        if result.get("already_exists"):
+            return {
+                "success": True,
+                "already_exists": True,
+                "message": result.get("message", "Movie already exists in Radarr"),
+                "movie": result.get("movie", {}),
+                "tmdb_id": result.get("tmdb_id")
+            }
+        
+        return result
 
     return impl
 

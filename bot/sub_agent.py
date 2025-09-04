@@ -646,17 +646,21 @@ CRITICAL REQUIREMENTS:
 2. If preferred quality is specified, try to use it
 3. If preferred quality isn't available, use the best available fallback quality
 4. Add the movie using radarr_add_movie with the selected quality
-5. Provide a clear summary of what was added and which quality was used
+5. If the movie already exists, acknowledge this gracefully - it's not an error
+6. Provide a clear summary of what was added or what already exists
 
 WORKFLOW:
 1. Call radarr_quality_profiles to get available quality profiles
 2. Select the best available quality (preferred > fallback > default)
 3. Call radarr_add_movie with the selected quality profile ID
-4. Provide a summary of the addition
+4. If the response indicates "already_exists": true, treat this as success
+5. Provide a summary of the addition or existing status
 
 Available tools: radarr_quality_profiles, radarr_add_movie, radarr_root_folders
 
-Remember: Always add the movie even if the preferred quality isn't available!
+Remember: 
+- Always add the movie even if the preferred quality isn't available
+- If a movie already exists, this is SUCCESS, not an error - acknowledge it gracefully
 """
 
         messages = [

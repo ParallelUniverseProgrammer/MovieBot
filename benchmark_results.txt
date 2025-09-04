@@ -1,0 +1,373 @@
+🎬 MovieBot Performance Benchmarking Tool
+==================================================
+Project root: /mnt/c/Users/krdge/Documents/Code/MovieBot
+Iterations: 2
+Slow threshold: 1000.0ms
+Verbose: True
+
+Services to test: Plex, Radarr, Sonarr, TMDb, Agent
+
+🔧 Validating environment and configuration...
+  Checking configuration completeness...
+  ✅ Plex configuration found
+  ✅ Radarr configuration found
+  ✅ Sonarr configuration found
+  ✅ TMDb configuration found
+  ✅ Environment validation passed
+
+🔍 Running Plex Connectivity benchmarks...
+
+  Iteration 1/2:
+  ✅ Plex Server Status: 5.8ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['server_name', 'version', 'active_sessions', 'library_count']}
+  ✅ Library Sections: 22.6ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['Movies', 'TV Shows']}
+  ✅ Movie Library Access: 0.0ms
+    Metadata: {'result_type': 'MovieSection'}
+  ✅ TV Library Access: 0.0ms
+    Metadata: {'result_type': 'ShowSection'}
+
+  Iteration 2/2:
+  ✅ Plex Server Status: 1.7ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['server_name', 'version', 'active_sessions', 'library_count']}
+  ✅ Library Sections: 25.8ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['Movies', 'TV Shows']}
+  ✅ Movie Library Access: 0.0ms
+    Metadata: {'result_type': 'MovieSection'}
+  ✅ TV Library Access: 0.0ms
+    Metadata: {'result_type': 'ShowSection'}
+
+📊 Plex Connectivity Summary:
+  Success: 8/8
+  Timing: 7.0ms avg, 0.0ms-25.9ms range
+  Variability: ±10.8ms std dev
+
+🔍 Running Plex Search Operations benchmarks...
+
+  Iteration 1/2:
+  ✅ Search Movies - 'inception': 22.0ms
+    Metadata: {'result_type': 'list'}
+  ✅ Search Shows - 'office': 23.6ms
+    Metadata: {'result_type': 'list'}
+  ✅ Search All - 'matrix': 24.6ms
+    Metadata: {'result_type': 'list'}
+  ✅ Search Movies - 'pirates': 18.4ms
+    Metadata: {'result_type': 'list'}
+
+  Iteration 2/2:
+  ✅ Search Movies - 'inception': 19.8ms
+    Metadata: {'result_type': 'list'}
+  ✅ Search Shows - 'office': 23.6ms
+    Metadata: {'result_type': 'list'}
+  ✅ Search All - 'matrix': 21.5ms
+    Metadata: {'result_type': 'list'}
+  ✅ Search Movies - 'pirates': 17.9ms
+    Metadata: {'result_type': 'list'}
+
+📊 Plex Search Operations Summary:
+  Success: 8/8
+  Timing: 21.4ms avg, 17.9ms-24.6ms range
+  Variability: ±2.5ms std dev
+
+🔍 Running Plex Metadata Operations benchmarks...
+
+  Iteration 1/2:
+  ✅ Recently Added Movies: 47.1ms
+    Metadata: {'result_type': 'list'}
+  ✅ Recently Added Shows: 140.6ms
+    Metadata: {'result_type': 'list'}
+  ✅ On Deck Items: 0.0ms
+    Metadata: {'result_type': 'list'}
+
+  Iteration 2/2:
+  ✅ Recently Added Movies: 18.2ms
+    Metadata: {'result_type': 'list'}
+  ✅ Recently Added Shows: 98.6ms
+    Metadata: {'result_type': 'list'}
+  ✅ On Deck Items: 0.0ms
+    Metadata: {'result_type': 'list'}
+
+📊 Plex Metadata Operations Summary:
+  Success: 6/6
+  Timing: 50.8ms avg, 0.0ms-140.6ms range
+  Variability: ±57.6ms std dev
+
+🔄 Running Plex Sequential vs Parallel Comparison...
+  ✅ Search Movies 1: 23.6ms
+    Metadata: {'result_type': 'list'}
+  ✅ Search Movies 2: 22.0ms
+    Metadata: {'result_type': 'list'}
+  ✅ Search Shows 1: 28.4ms
+    Metadata: {'result_type': 'list'}
+  ✅ Search Shows 2: 36.8ms
+    Metadata: {'result_type': 'list'}
+  ✅ Search Movies 1: 23.2ms
+    Metadata: {'result_type': 'list'}
+  ✅ Search Movies 2: 21.8ms
+    Metadata: {'result_type': 'list'}
+  ✅ Search Shows 1: 27.5ms
+    Metadata: {'result_type': 'list'}
+  ✅ Search Shows 2: 33.3ms
+    Metadata: {'result_type': 'list'}
+
+📊 Sequential vs Parallel Comparison:
+  Sequential total time: 111.0ms
+  Parallel total time: 106.1ms
+  Speedup factor: 1.05x
+  ⚠️  Parallel execution shows minimal improvement
+
+📊 Plex Parallel Operations Summary:
+  Success: 4/4
+  Timing: 26.4ms avg, 21.8ms-33.3ms range
+  Variability: ±5.2ms std dev
+
+🔍 Running Radarr Connectivity benchmarks...
+
+  Iteration 1/2:
+  ✅ System Status: 79.1ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['appName', 'instanceName', 'version', 'buildTime', 'isDebug', 'isProduction', 'isAdmin', 'isUserInteractive', 'startupPath', 'appData', 'osName', 'osVersion', 'isNetCore', 'isLinux', 'isOsx', 'isWindows', 'isDocker', 'mode', 'branch', 'databaseType', 'databaseVersion', 'authentication', 'migrationVersion', 'urlBase', 'runtimeVersion', 'runtimeName', 'startTime', 'packageUpdateMechanism']}
+  ✅ Quality Profiles: 25.6ms
+    Metadata: {'result_type': 'list'}
+  ✅ Root Folders: 36.6ms
+    Metadata: {'result_type': 'list'}
+
+  Iteration 2/2:
+  ✅ System Status: 29.6ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['appName', 'instanceName', 'version', 'buildTime', 'isDebug', 'isProduction', 'isAdmin', 'isUserInteractive', 'startupPath', 'appData', 'osName', 'osVersion', 'isNetCore', 'isLinux', 'isOsx', 'isWindows', 'isDocker', 'mode', 'branch', 'databaseType', 'databaseVersion', 'authentication', 'migrationVersion', 'urlBase', 'runtimeVersion', 'runtimeName', 'startTime', 'packageUpdateMechanism']}
+  ✅ Quality Profiles: 26.5ms
+    Metadata: {'result_type': 'list'}
+  ✅ Root Folders: 30.6ms
+    Metadata: {'result_type': 'list'}
+
+📊 Radarr Connectivity Summary:
+  Success: 6/6
+  Timing: 38.0ms avg, 25.6ms-79.1ms range
+  Variability: ±20.5ms std dev
+
+🔍 Running Radarr Movie Operations benchmarks...
+
+  Iteration 1/2:
+  ✅ Get All Movies: 278.2ms
+    Metadata: {'result_type': 'list'}
+  ✅ Get Movie Queue: 23.6ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'pageSize', 'sortKey', 'sortDirection', 'totalRecords', 'records']}
+  ✅ Get Movie History: 63.9ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'pageSize', 'sortKey', 'sortDirection', 'totalRecords', 'records']}
+  ✅ Get Wanted Missing: 24.3ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'pageSize', 'sortKey', 'sortDirection', 'totalRecords', 'records']}
+
+  Iteration 2/2:
+  ✅ Get All Movies: 279.7ms
+    Metadata: {'result_type': 'list'}
+  ✅ Get Movie Queue: 23.7ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'pageSize', 'sortKey', 'sortDirection', 'totalRecords', 'records']}
+  ✅ Get Movie History: 56.0ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'pageSize', 'sortKey', 'sortDirection', 'totalRecords', 'records']}
+  ✅ Get Wanted Missing: 24.5ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'pageSize', 'sortKey', 'sortDirection', 'totalRecords', 'records']}
+
+📊 Radarr Movie Operations Summary:
+  Success: 8/8
+  Timing: 96.8ms avg, 23.6ms-279.7ms range
+  Variability: ±113.6ms std dev
+
+🔍 Running Radarr Configuration benchmarks...
+
+  Iteration 1/2:
+  ✅ Get Indexers: 24.5ms
+    Metadata: {'result_type': 'list'}
+  ✅ Get Download Clients: 21.3ms
+    Metadata: {'result_type': 'list'}
+  ✅ Get Notifications: 21.5ms
+    Metadata: {'result_type': 'list'}
+  ✅ Get Tags: 22.1ms
+    Metadata: {'result_type': 'list'}
+
+  Iteration 2/2:
+  ✅ Get Indexers: 34.1ms
+    Metadata: {'result_type': 'list'}
+  ✅ Get Download Clients: 31.0ms
+    Metadata: {'result_type': 'list'}
+  ✅ Get Notifications: 21.5ms
+    Metadata: {'result_type': 'list'}
+  ✅ Get Tags: 21.1ms
+    Metadata: {'result_type': 'list'}
+
+📊 Radarr Configuration Summary:
+  Success: 8/8
+  Timing: 24.6ms avg, 21.1ms-34.0ms range
+  Variability: ±5.0ms std dev
+
+🔄 Running Radarr Sequential vs Parallel Comparison...
+  ✅ System Status: 28.6ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['appName', 'instanceName', 'version', 'buildTime', 'isDebug', 'isProduction', 'isAdmin', 'isUserInteractive', 'startupPath', 'appData', 'osName', 'osVersion', 'isNetCore', 'isLinux', 'isOsx', 'isWindows', 'isDocker', 'mode', 'branch', 'databaseType', 'databaseVersion', 'authentication', 'migrationVersion', 'urlBase', 'runtimeVersion', 'runtimeName', 'startTime', 'packageUpdateMechanism']}
+  ✅ Quality Profiles: 26.0ms
+    Metadata: {'result_type': 'list'}
+  ✅ Root Folders: 44.3ms
+    Metadata: {'result_type': 'list'}
+  ✅ Get Movies: 282.5ms
+    Metadata: {'result_type': 'list'}
+  ✅ System Status: 78.5ms
+Traceback (most recent call last):
+  File "/mnt/c/Users/krdge/Documents/Code/MovieBot/scripts/benchmark_performance.py", line 593, in run_sonarr_benchmarks
+    ("Get Indexers", "Sonarr", sonarr_client.get_indexers, (), {}),
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'SonarrClient' object has no attribute 'get_indexers'
+    Metadata: {'result_type': 'dict', 'result_keys': ['appName', 'instanceName', 'version', 'buildTime', 'isDebug', 'isProduction', 'isAdmin', 'isUserInteractive', 'startupPath', 'appData', 'osName', 'osVersion', 'isNetCore', 'isLinux', 'isOsx', 'isWindows', 'isDocker', 'mode', 'branch', 'databaseType', 'databaseVersion', 'authentication', 'migrationVersion', 'urlBase', 'runtimeVersion', 'runtimeName', 'startTime', 'packageUpdateMechanism']}
+  ✅ Quality Profiles: 56.0ms
+    Metadata: {'result_type': 'list'}
+  ✅ Root Folders: 48.4ms
+    Metadata: {'result_type': 'list'}
+  ✅ Get Movies: 283.7ms
+    Metadata: {'result_type': 'list'}
+
+📊 Sequential vs Parallel Comparison:
+  Sequential total time: 384.1ms
+  Parallel total time: 337.3ms
+  Speedup factor: 1.14x
+  ⚠️  Parallel execution shows modest improvement
+
+📊 Radarr Parallel Operations Summary:
+  Success: 4/4
+  Timing: 116.7ms avg, 48.4ms-283.7ms range
+  Variability: ±112.1ms std dev
+
+🔍 Running Sonarr Connectivity benchmarks...
+
+  Iteration 1/2:
+  ✅ System Status: 28.2ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['appName', 'instanceName', 'version', 'buildTime', 'isDebug', 'isProduction', 'isAdmin', 'isUserInteractive', 'startupPath', 'appData', 'osName', 'osVersion', 'isNetCore', 'isLinux', 'isOsx', 'isWindows', 'isDocker', 'mode', 'branch', 'authentication', 'migrationVersion', 'urlBase', 'runtimeVersion', 'runtimeName', 'startTime', 'packageUpdateMechanism', 'databaseVersion', 'databaseType']}
+  ✅ Quality Profiles: 36.5ms
+    Metadata: {'result_type': 'list'}
+  ✅ Root Folders: 25.8ms
+    Metadata: {'result_type': 'list'}
+
+  Iteration 2/2:
+  ✅ System Status: 27.0ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['appName', 'instanceName', 'version', 'buildTime', 'isDebug', 'isProduction', 'isAdmin', 'isUserInteractive', 'startupPath', 'appData', 'osName', 'osVersion', 'isNetCore', 'isLinux', 'isOsx', 'isWindows', 'isDocker', 'mode', 'branch', 'authentication', 'migrationVersion', 'urlBase', 'runtimeVersion', 'runtimeName', 'startTime', 'packageUpdateMechanism', 'databaseVersion', 'databaseType']}
+  ✅ Quality Profiles: 27.1ms
+    Metadata: {'result_type': 'list'}
+  ✅ Root Folders: 26.1ms
+    Metadata: {'result_type': 'list'}
+
+📊 Sonarr Connectivity Summary:
+  Success: 6/6
+  Timing: 28.4ms avg, 25.8ms-36.5ms range
+  Variability: ±4.1ms std dev
+
+🔍 Running Sonarr Series Operations benchmarks...
+
+  Iteration 1/2:
+  ✅ Get All Series: 57.7ms
+    Metadata: {'result_type': 'list'}
+  ✅ Get Episode Queue: 22.1ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'pageSize', 'sortKey', 'sortDirection', 'totalRecords', 'records']}
+  ✅ Get Episode History: 59.5ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'pageSize', 'sortKey', 'sortDirection', 'totalRecords', 'records']}
+  ✅ Get Wanted Missing: 29.0ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'pageSize', 'sortKey', 'sortDirection', 'totalRecords', 'records']}
+
+  Iteration 2/2:
+  ✅ Get All Series: 46.9ms
+    Metadata: {'result_type': 'list'}
+  ✅ Get Episode Queue: 22.2ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'pageSize', 'sortKey', 'sortDirection', 'totalRecords', 'records']}
+  ✅ Get Episode History: 57.2ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'pageSize', 'sortKey', 'sortDirection', 'totalRecords', 'records']}
+  ✅ Get Wanted Missing: 28.1ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'pageSize', 'sortKey', 'sortDirection', 'totalRecords', 'records']}
+
+📊 Sonarr Series Operations Summary:
+  Success: 8/8
+  Timing: 40.3ms avg, 22.1ms-59.5ms range
+  Variability: ±16.7ms std dev
+  ❌ Sonarr benchmarks failed: 'SonarrClient' object has no attribute 'get_indexers'
+
+🔍 Running TMDb Search Operations benchmarks...
+
+  Iteration 1/2:
+  ✅ Search Movies - 'inception': 156.3ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Search Movies - 'matrix': 33.9ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Search TV Shows - 'office': 32.2ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Search People - 'tom hanks': 30.8ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+
+  Iteration 2/2:
+  ✅ Search Movies - 'inception': 35.9ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Search Movies - 'matrix': 33.0ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Search TV Shows - 'office': 33.0ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Search People - 'tom hanks': 31.0ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+
+📊 TMDb Search Operations Summary:
+  Success: 8/8
+  Timing: 48.3ms avg, 30.8ms-156.3ms range
+  Variability: ±43.7ms std dev
+
+🔍 Running TMDb Discovery Operations benchmarks...
+
+  Iteration 1/2:
+  ✅ Popular Movies: 32.1ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Top Rated Movies: 32.5ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Now Playing Movies: 36.5ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Popular TV Shows: 33.2ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+
+  Iteration 2/2:
+  ✅ Popular Movies: 29.3ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Top Rated Movies: 31.1ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Now Playing Movies: 30.4ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Popular TV Shows: 31.9ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+
+📊 TMDb Discovery Operations Summary:
+  Success: 8/8
+  Timing: 32.1ms avg, 29.3ms-36.5ms range
+  Variability: ±2.1ms std dev
+
+🔄 Running TMDb Sequential vs Parallel Comparison...
+  ✅ Search Movies 1: 29.6ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Search Movies 2: 30.3ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Popular Movies: 30.4ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Top Rated Movies: 31.1ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Search Movies 1: 31.2ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Search Movies 2: 93.5ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Popular Movies: 120.9ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+  ✅ Top Rated Movies: 92.8ms
+    Metadata: {'result_type': 'dict', 'result_keys': ['page', 'total_pages', 'total_results', 'results']}
+
+📊 Sequential vs Parallel Comparison:
+  Sequential total time: 121.6ms
+  Parallel total time: 121.5ms
+  Speedup factor: 1.00x
+  ⚠️  Parallel execution shows minimal improvement
+
+📊 TMDb Parallel Operations Summary:
+  Success: 4/4
+  Timing: 84.6ms avg, 31.2ms-120.9ms range
+  Variability: ±37.9ms std dev
+  🤖 Running agent integration benchmarks...
+
+🔍 Running Simple Agent Queries...
+
+  Iteration 1/2:
+  ✅ Agent Query: Show me recent movies: 32645.2ms ⚠️ SLOW

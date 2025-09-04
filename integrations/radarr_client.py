@@ -15,6 +15,67 @@ class RadarrClient:
     def _new_client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=self.base_url, headers={"X-Api-Key": self.api_key}, timeout=20.0)
 
+    def _is_movie_exists_error(self, error: httpx.HTTPStatusError) -> bool:
+        """Check if the error indicates the movie already exists in Radarr."""
+        try:
+            # Check if it's a 400 Bad Request with MovieExistsValidator error
+            if error.response.status_code == 400:
+                # Try to parse the error response
+                import json
+                error_data = error.response.json()
+                if isinstance(error_data, list):
+                    for error_item in error_data:
+                        if (isinstance(error_item, dict) and 
+                            error_item.get("errorCode") == "MovieExistsValidator"):
+                            return True
+                elif isinstance(error_data, dict):
+                    if error_data.get("errorCode") == "MovieExistsValidator":
+                        return True
+        except Exception:
+            # If we can't parse the error, check the error message
+            error_msg = str(error).lower()
+            return ("already been added" in error_msg or 
+                   "movie exists" in error_msg or
+                   "movieexistsvalidator" in error_msg)
+        return False
+
+    async def _get_existing_movie_info(self, tmdb_id: int) -> Dict[str, Any]:
+        """Get information about an existing movie by TMDb ID."""
+        try:
+            # Get all movies and find the one with matching TMDb ID
+            movies = await self.get_movies()
+            for movie in movies:
+                if movie.get("tmdbId") == tmdb_id:
+                    return {
+                        **movie,
+                        "already_exists": True,
+                        "message": f"Movie with TMDb ID {tmdb_id} already exists in Radarr"
+                    }
+            
+            # If not found in movies list, try lookup to get basic info
+            lookup_results = await self.lookup(f"tmdb:{tmdb_id}")
+            if lookup_results:
+                movie_info = lookup_results[0]
+                return {
+                    **movie_info,
+                    "already_exists": True,
+                    "message": f"Movie with TMDb ID {tmdb_id} already exists in Radarr"
+                }
+            
+            # Fallback response
+            return {
+                "tmdbId": tmdb_id,
+                "already_exists": True,
+                "message": f"Movie with TMDb ID {tmdb_id} already exists in Radarr"
+            }
+        except Exception:
+            # Fallback response if we can't get movie info
+            return {
+                "tmdbId": tmdb_id,
+                "already_exists": True,
+                "message": f"Movie with TMDb ID {tmdb_id} already exists in Radarr"
+            }
+
     async def close(self) -> None:
         # No-op when using per-call clients. Kept for compatibility with existing call sites.
         try:
@@ -97,6 +158,13 @@ class RadarrClient:
             try:
                 r.raise_for_status()
                 return r.json()
+            except httpx.HTTPStatusError as e:
+                # Check if this is a "movie already exists" error
+                if self._is_movie_exists_error(e):
+                    # Return the existing movie info instead of failing
+                    return await self._get_existing_movie_info(tmdb_id)
+                # For other errors, continue to enriched payload attempt
+                pass
             except Exception:
                 pass
         
@@ -125,6 +193,20 @@ class RadarrClient:
             try:
                 r2.raise_for_status()
                 return r2.json()
+            except httpx.HTTPStatusError as e:
+                # Check if this is a "movie already exists" error
+                if self._is_movie_exists_error(e):
+                    # Return the existing movie info instead of failing
+                    return await self._get_existing_movie_info(tmdb_id)
+                # For other errors, raise the original exception
+                try:
+                    err_txt = await r2.aread()
+                    err_snippet = err_txt.decode(errors="ignore")[:500]
+                except Exception:
+                    err_snippet = ""
+                raise httpx.HTTPStatusError(
+                    f"Radarr add_movie failed: {err_snippet}", request=r2.request, response=r2
+                )
             except Exception:
                 try:
                     err_txt = await r2.aread()

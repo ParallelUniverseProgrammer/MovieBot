@@ -147,7 +147,7 @@ def resolve_llm_selection(project_root: Path, role: str, settings: Settings | No
         if raw and has_api_key(p):
             sel = coerce_selection(raw)
             # Default reasoning effort for chat role if not specified
-            if role == "chat" and not sel.get("reasoningEffort"):
+            if role == "chat" and "reasoningEffort" not in sel:
                 sel["reasoningEffort"] = "minimal"
             return p, sel
 
@@ -158,13 +158,13 @@ def resolve_llm_selection(project_root: Path, role: str, settings: Settings | No
             # role-based defaults
             raw = "gpt-5-mini" if role == "chat" else ("gpt-5" if role == "smart" else "gpt-5-nano")
         sel = coerce_selection(raw)
-        if role == "chat" and not sel.get("reasoningEffort"):
+        if role == "chat" and "reasoningEffort" not in sel:
             sel["reasoningEffort"] = "minimal"
         return "openai", sel
     if settings.openrouter_api_key:
         raw = (providers_cfg.get("openrouter", {}) or {}).get(role) or "z-ai/glm-4.5-air:free"
         sel = coerce_selection(raw)
-        if role == "chat" and not sel.get("reasoningEffort"):
+        if role == "chat" and "reasoningEffort" not in sel:
             sel["reasoningEffort"] = "minimal"
         return "openrouter", sel
 
