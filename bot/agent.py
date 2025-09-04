@@ -1587,6 +1587,18 @@ Respond in JSON format:
             resp = await self._achat_once(messages, model, "summarizer")
             content = resp.choices[0].message.content
             
+            # Handle case where LLM returns None content
+            if content is None:
+                self.log.warning("LLM returned None content for classification, using fallback")
+                return {
+                    "complexity": "medium",
+                    "confidence": 0.5,
+                    "reasoning": "LLM returned no content, using medium complexity fallback",
+                    "requires_write": False,
+                    "suggested_tools": [],
+                    "estimated_iterations": 3
+                }
+            
             # Parse JSON response
             import json
             try:

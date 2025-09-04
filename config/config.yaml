@@ -13,8 +13,8 @@ llm:
     priority: [openai, openrouter]
     openai:
       chat:
-        model: gpt-5-mini
-        reasoningEffort: medium
+        model: gpt-4.1
+        #reasoningEffort: medium
         params:
           tool_choice: auto
       smart:
@@ -34,7 +34,7 @@ llm:
         params:
           max_tokens: 1250
       summarizer:
-        model: gpt-4.1-mini
+        model: gpt-4.1-nano
         #reasoningEffort: minimal
         params:
           max_tokens: 750
