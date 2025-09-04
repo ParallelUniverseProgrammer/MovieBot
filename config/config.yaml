@@ -7,14 +7,14 @@ sonarr:
   qualityProfileId: 4
   rootFolderPath: "D:\\TV"
 llm:
-  agentMaxIters: 6
-  workerMaxIters: 3
+  agentMaxIters: 10
+  workerMaxIters: 5
   providers:
     priority: [openai, openrouter]
     openai:
       chat:
-        model: gpt-4.1-mini
-        #reasoningEffort: minimal
+        model: gpt-4.1
+        #reasoningEffort: medium
         params:
           tool_choice: auto
       smart:
