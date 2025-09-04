@@ -456,17 +456,25 @@ class MovieBotClient(discord.Client):
                     pass
                 
                 # Pass through event types as-is (agent already emits correct types)
-                # Ensure thread-safety if ever called off-loop
+                # Handle both in-loop and off-loop cases
+                event_data = {"type": progress_type, "details": parsed_details}
                 try:
+                    # Try to get the running loop and schedule the put operation
                     loop = asyncio.get_running_loop()
-                    event_data = {"type": progress_type, "details": parsed_details}
                     loop.call_soon_threadsafe(progress_events.put_nowait, event_data)
                     log.debug(f"Progress event queued: {event_data}")
                 except RuntimeError:
-                    # No running loop - this shouldn't happen in Discord context
-                    # but if it does, we'll skip the update rather than risk race conditions
-                    log.warning("No running loop for progress callback")
-                    pass
+                    # No running loop - we're in a thread, so we need to find the Discord bot's loop
+                    # This is a bit hacky but necessary for the callback to work from threads
+                    try:
+                        # Try to put the event directly (asyncio.Queue is thread-safe)
+                        progress_events.put_nowait(event_data)
+                        print(f"PROGRESS EVENT QUEUED DIRECTLY: {event_data}")
+                        log.debug(f"Progress event queued directly: {event_data}")
+                    except Exception as e:
+                        print(f"FAILED TO QUEUE: {e}")
+                        log.warning(f"Failed to queue progress event: {e}")
+                        pass
             except Exception as e:
                 # Log errors for debugging
                 log.warning(f"Progress callback error: {e}")
