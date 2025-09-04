@@ -288,16 +288,6 @@ class PromptComponents:
             "CRITICAL: Validate parameters against this guide before calling tools."
         )
 
-    @staticmethod
-    def decision_rules() -> str:
-        """Decision-making rules and defaults."""
-        return (
-            "DECISION RULES:\n"
-            "• Don’t ask for confirmation to add when user intent is clear.\n"
-            "• Choose best match by vote_count, rating, recency, and exact title.\n"
-            "• '70s' means 1970–1979. Use [Plex] only if search_plex returns results.\n"
-            "• Never present content without calling tools first. Never invent data."
-        )
 
     @staticmethod
     def example_flows() -> str:
@@ -383,17 +373,11 @@ class PromptComponents:
         return (
             "RESPONSE OPTIMIZATION:\n"
             "• Use compact → standard/detailed only when necessary for final picks.\n"
-            "• Keep results to top 3 items. No filler. No meta or tool chatter."
-        )
-
-    @staticmethod
-    def decision_rules() -> str:
-        """Decision-making rules and defaults."""
-        return (
-            "DECISIONS:\n"
+            "• Keep results to top 3 items. No filler. No meta or tool chatter.\n"
             "• If ties, prefer exact title match, higher vote_count, newer release.\n"
             "• When media type unclear, include both but cap at 3 total items.\n"
-            "• Respect household constraints (e.g., content ratings) automatically."
+            "• Respect household constraints (e.g., content ratings) automatically.\n"
+            "• Finalize without extra tool calls after validation. No sign-offs."
         )
 
     @staticmethod
@@ -433,7 +417,6 @@ def build_minimal_system_prompt() -> str:
             components.write_operation_guidance(),
             components.loop_prevention(),
             components.response_optimization(),
-            components.decision_rules(),
             components.quality_standards(),
         ]
     )

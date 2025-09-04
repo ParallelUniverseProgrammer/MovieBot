@@ -215,17 +215,15 @@ class Agent:
         await self._emit_progress("llm.finish", {"model": model, "content_preview": content_preview})
         return resp
 
-    def _results_indicate_finalizable(self, tool_name_and_results: List[tuple]) -> bool:
-        """Heuristic to decide if we likely have enough info to finalize.
-
-        True when a write-style tool succeeded, or when we have any read-style
-        content without errors. Conservative on errors.
-        """
+    def _calculate_result_confidence(self, tool_name_and_results: List[tuple]) -> float:
+        """Calculate confidence score (0.0-1.0) for finalization decision."""
         try:
-            any_error = False
-            any_write_success = False
-            any_read_content = False
-
+            if not tool_name_and_results:
+                return 0.0
+            
+            total_score = 0.0
+            max_score = 0.0
+            
             def _is_write_tool(name: str) -> bool:
                 n = (name or "").lower()
                 if any(x in n for x in ("add", "update", "delete", "monitor", "set_", "create", "remove")):
@@ -234,31 +232,90 @@ class Agent:
                     return True
                 return False
 
-            def _has_nonempty_list(d: Dict[str, Any]) -> bool:
+            def _calculate_tool_score(name: str, result: Any) -> float:
+                """Calculate individual tool result score."""
+                if not isinstance(result, dict):
+                    return 0.5  # Unknown result type
+                
+                # Error penalty
+                if result.get("ok") is False or "error" in result:
+                    return 0.0
+                
+                # Write tool success bonus
+                if _is_write_tool(str(name)):
+                    return 1.0  # Write success is always high confidence
+                
+                # Read tool scoring based on content quality
+                score = 0.3  # Base score for successful read
+                
+                # Content richness bonus
                 for key in ("items", "results", "movies", "series", "episodes", "playlists", "collections"):
-                    val = d.get(key)
-                    if isinstance(val, list) and len(val) > 0:
-                        return True
+                    val = result.get(key)
+                    if isinstance(val, list):
+                        if len(val) > 0:
+                            score += 0.3  # Has content
+                        if len(val) >= 3:
+                            score += 0.2  # Rich content
+                        if len(val) >= 10:
+                            score += 0.1  # Very rich content
+                
+                # Metadata richness bonus
+                metadata_keys = ["title", "year", "rating", "genre", "summary", "description"]
+                metadata_count = sum(1 for key in metadata_keys if key in result and result[key])
+                score += min(metadata_count * 0.05, 0.2)  # Up to 0.2 bonus for metadata
+                
+                return min(score, 1.0)
+            
+            for _tc_id, name, result, _attempts, _cache_hit in tool_name_and_results:
+                tool_score = _calculate_tool_score(name, result)
+                tool_weight = 2.0 if _is_write_tool(str(name)) else 1.0  # Weight write tools more
+                
+                total_score += tool_score * tool_weight
+                max_score += tool_weight
+            
+            return total_score / max_score if max_score > 0 else 0.0
+        except Exception:
+            return 0.0
+
+    def _results_indicate_finalizable(self, tool_name_and_results: List[tuple]) -> bool:
+        """Enhanced heuristic to decide if we likely have enough info to finalize.
+
+        Uses confidence scoring for more intelligent finalization decisions.
+        """
+        try:
+            # Calculate confidence score
+            confidence = self._calculate_result_confidence(tool_name_and_results)
+            
+            # High confidence threshold for finalization
+            if confidence >= 0.7:
+                return True
+            
+            # Check for write success (always finalizable)
+            any_write_success = False
+            any_error = False
+            
+            def _is_write_tool(name: str) -> bool:
+                n = (name or "").lower()
+                if any(x in n for x in ("add", "update", "delete", "monitor", "set_", "create", "remove")):
+                    return True
+                if n in ("update_household_preferences",):
+                    return True
                 return False
 
             for _tc_id, name, result, _attempts, _cache_hit in tool_name_and_results:
                 if isinstance(result, dict):
                     if result.get("ok") is False or "error" in result:
                         any_error = True
-                    # Treat write success broadly: any write tool that returns a dict without an explicit error
-                    # and without ok=False is considered successful. Many integrations return raw objects (e.g., {"id": 123}).
                     if _is_write_tool(str(name)) and ("error" not in result) and (result.get("ok") is not False):
                         any_write_success = True
-                    if _has_nonempty_list(result):
-                        any_read_content = True
-                else:
-                    any_read_content = True
 
             if any_write_success:
                 return True
             if any_error:
                 return False
-            return any_read_content
+            
+            # Medium confidence with some content
+            return confidence >= 0.4
         except Exception:
             return False
 
@@ -708,8 +765,44 @@ class Agent:
             except Exception:
                 pass
             return False
+
+
+
+        # Classify query complexity and adjust iteration limit
+        complexity = self._classify_query_complexity(base_messages)
+        optimal_iters = self._get_optimal_iteration_limit(complexity, role)
+        iters = min(iters, optimal_iters)  # Use the smaller of config limit or optimal limit
+        
+        # Check for query templates for common patterns
+        query_template = self._get_query_template(base_messages)
+        
+        # Add adaptive iteration adjustment based on query template
+        if query_template is not None:
+            # For template-based queries, we can be more aggressive with iteration limits
+            if query_template["name"] in ["whats_new", "library_browse", "system_status"]:
+                iters = min(iters, 2)  # Very simple queries
+            elif query_template["name"] in ["trending", "genre_discovery", "year_discovery"]:
+                iters = min(iters, 3)  # Medium complexity queries
+            elif query_template["name"] in ["similar_content"]:
+                iters = min(iters, 4)  # Slightly more complex queries
+            
+            # Add template guidance to system message
+            template_guidance = f"\n\nQUERY TEMPLATE DETECTED: {query_template['description']}\n"
+            template_guidance += f"Suggested tools: {', '.join(query_template['tools'])}\n"
+            template_guidance += "Use these tools in parallel for optimal results."
+            messages.append({"role": "system", "content": template_guidance})
+        
         must_write = _user_intent_requires_write(base_messages)
-        await self._emit_progress("agent.start", {"parallelism": parallelism_for_prompt, "iters": iters})
+        
+        # Emit optimization details
+        optimization_info = {
+            "parallelism": parallelism_for_prompt, 
+            "iters": iters,
+            "complexity": complexity,
+            "template": query_template["name"] if query_template else None,
+            "must_write": must_write
+        }
+        await self._emit_progress("agent.start", optimization_info)
         try:
             if getattr(self, "progress", None) is not None:
                 self.progress.start_heartbeat("agent")
@@ -792,7 +885,11 @@ class Agent:
                         self.progress.stop_heartbeat("agent")
                 except Exception:
                     pass
-                await self._emit_progress("agent.finish", {"reason": "final_answer"})
+                await self._emit_progress("agent.finish", {
+                    "reason": "final_answer", 
+                    "iterations_used": iter_idx + 1,
+                    "optimization": "early_termination"
+                })
                 return last_response
             # Track write intent signaled by the model
             try:
@@ -930,7 +1027,13 @@ class Agent:
                     next_tool_choice_override = "none"
             else:
                 try:
+                    # Calculate confidence score for better decision making
+                    confidence = self._calculate_result_confidence(flattened_results)
                     allowed_to_finalize = self._results_indicate_finalizable(flattened_results)
+                    
+                    # Log confidence for debugging
+                    self.log.debug(f"Result confidence: {confidence:.2f}, finalizable: {allowed_to_finalize}")
+                    
                     if write_success:
                         allowed_to_finalize = False
                     if not allow_finalize_on_failure:
@@ -939,11 +1042,45 @@ class Agent:
                         if must_write and not write_success:
                             allowed_to_finalize = False
                     if allowed_to_finalize:
+                        # Check if this is a simple read-only query that can benefit from streaming
+                        is_simple_readonly = (complexity == "simple" and not must_write and 
+                                            query_template is not None and 
+                                            query_template["name"] in ["whats_new", "library_browse", "system_status", "trending"])
+                        
                         messages.append({
                             "role": "system",
                             "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Be warm, friendly, and decisive. Use plain, upbeat language. Do not call tools."
                         })
-                        if stream_final_to_callback is not None:
+                        
+                        if stream_final_to_callback is not None and is_simple_readonly:
+                            # Use streaming for simple read-only queries
+                            try:
+                                from config.loader import resolve_llm_selection
+                                _, sel = resolve_llm_selection(self.project_root, role)
+                                params = dict(sel.get("params", {}))
+                                params["temperature"] = 1
+                                async for chunk in self.llm.astream_chat(
+                                    model=model,
+                                    messages=messages,
+                                    tools=None,
+                                    reasoning=sel.get("reasoningEffort"),
+                                    **params,
+                                ):
+                                    try:
+                                        await stream_final_to_callback(chunk)
+                                    except Exception:
+                                        pass
+                                try:
+                                    if getattr(self, "progress", None) is not None:
+                                        self.progress.stop_heartbeat("agent")
+                                except Exception:
+                                    pass
+                                await self._emit_progress("agent.finish", {"reason": "final_answer_streamed"})
+                                return await self._achat_once(messages, model, role, tool_choice_override="none")
+                            except Exception:
+                                force_finalize_next = True
+                        elif stream_final_to_callback is not None:
+                            # Use streaming for other queries too
                             try:
                                 from config.loader import resolve_llm_selection
                                 _, sel = resolve_llm_selection(self.project_root, role)
@@ -994,23 +1131,20 @@ class Agent:
             await self._emit_progress("agent.metrics", {"iters": iters, "llm_calls": llm_calls_count, "tool_calls": total_tool_calls, "elapsed_ms": elapsed_ms})
         except Exception:
             pass
-        # If we exhausted iterations and still have tool calls requested, synthesize a graceful reply
-        synthesized = {
-            "choices": [
-                {
-                    "message": {
-                        "content": "Here's what I found with the time available. I've done my best to help with your request!"
-                    }
-                }
-            ]
-        }
+        
+        # Enhanced iteration limit handling with transparency
+        final_response = await self._generate_iteration_limit_response(
+            messages, model, role, iters, llm_calls_count, total_tool_calls, 
+            elapsed_ms, write_completed, seen_write_intent, must_write
+        )
+        
         try:
             if getattr(self, "progress", None) is not None:
                 self.progress.stop_heartbeat("agent")
         except Exception:
             pass
         await self._emit_progress("agent.finish", {"reason": "max_iters"})
-        return synthesized  # type: ignore[return-value]
+        return final_response
 
     def _preserve_raw_if_small(self, result: Any, max_keep: int) -> Optional[Dict[str, Any]]:
         """If the tool result contains a small list (<= max_keep), return a copy preserving fields.
@@ -1031,6 +1165,329 @@ class Agent:
             return None
         return None
 
+    def _analyze_tool_execution_summary(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Analyze tool execution history to provide a summary of what was accomplished."""
+        try:
+            tool_messages = [m for m in messages if m.get("role") == "tool"]
+            tool_calls = [m for m in messages if m.get("role") == "assistant" and m.get("tool_calls")]
+            
+            # Count successful vs failed tools
+            successful_tools = 0
+            failed_tools = 0
+            tool_families_used = set()
+            write_operations = 0
+            read_operations = 0
+            
+            for tool_msg in tool_messages:
+                name = tool_msg.get("name", "")
+                content = tool_msg.get("content", "")
+                
+                # Parse tool result
+                try:
+                    if content:
+                        result_data = json.loads(content)
+                        summary = result_data.get("summary", {})
+                        
+                        # Check if tool succeeded
+                        if isinstance(summary, dict):
+                            if summary.get("ok") is False or "error" in summary:
+                                failed_tools += 1
+                            else:
+                                successful_tools += 1
+                        else:
+                            successful_tools += 1
+                    else:
+                        failed_tools += 1
+                except Exception:
+                    failed_tools += 1
+                
+                # Categorize by family and operation type
+                family = self._classify_tool_family(name)
+                tool_families_used.add(family)
+                
+                if self._is_write_tool_name(name):
+                    write_operations += 1
+                else:
+                    read_operations += 1
+            
+            return {
+                "total_tools": len(tool_messages),
+                "successful_tools": successful_tools,
+                "failed_tools": failed_tools,
+                "tool_families": list(tool_families_used),
+                "write_operations": write_operations,
+                "read_operations": read_operations,
+                "success_rate": successful_tools / len(tool_messages) if tool_messages else 0
+            }
+        except Exception:
+            return {
+                "total_tools": 0,
+                "successful_tools": 0,
+                "failed_tools": 0,
+                "tool_families": [],
+                "write_operations": 0,
+                "read_operations": 0,
+                "success_rate": 0
+            }
+
+    def _extract_key_findings(self, messages: List[Dict[str, Any]]) -> List[str]:
+        """Extract key findings from tool results to highlight in the final response."""
+        try:
+            findings = []
+            tool_messages = [m for m in messages if m.get("role") == "tool"]
+            
+            for tool_msg in tool_messages:
+                name = tool_msg.get("name", "")
+                content = tool_msg.get("content", "")
+                
+                try:
+                    if content:
+                        result_data = json.loads(content)
+                        summary = result_data.get("summary", {})
+                        
+                        # Extract meaningful findings based on tool type
+                        if isinstance(summary, dict):
+                            if "movies" in summary and isinstance(summary["movies"], list) and summary["movies"]:
+                                findings.append(f"Found {len(summary['movies'])} movies")
+                            elif "series" in summary and isinstance(summary["series"], list) and summary["series"]:
+                                findings.append(f"Found {len(summary['series'])} TV series")
+                            elif "items" in summary and isinstance(summary["items"], list) and summary["items"]:
+                                findings.append(f"Found {len(summary['items'])} items")
+                            elif "ok" in summary and summary["ok"] is True:
+                                if "add" in name or "monitor" in name:
+                                    findings.append("Successfully added to your collection")
+                                elif "update" in name:
+                                    findings.append("Successfully updated")
+                            elif "error" in summary:
+                                findings.append(f"Encountered issue with {name}")
+                except Exception:
+                    continue
+            
+            return findings[:5]  # Limit to top 5 findings
+        except Exception:
+            return []
+
+    def _get_pending_tool_calls(self, messages: List[Dict[str, Any]]) -> List[str]:
+        """Extract tool calls that were requested but may not have been executed due to iteration limits."""
+        try:
+            pending_tools = []
+            assistant_messages = [m for m in messages if m.get("role") == "assistant" and m.get("tool_calls")]
+            
+            # Get the last assistant message with tool calls (most recent request)
+            if assistant_messages:
+                last_assistant = assistant_messages[-1]
+                tool_calls = last_assistant.get("tool_calls", [])
+                for tc in tool_calls:
+                    if isinstance(tc, dict) and "function" in tc:
+                        pending_tools.append(tc["function"].get("name", "unknown"))
+                    elif hasattr(tc, 'function'):
+                        pending_tools.append(tc.function.name)
+            
+            return pending_tools
+        except Exception:
+            return []
+
+    async def _generate_iteration_limit_response(
+        self, 
+        messages: List[Dict[str, Any]], 
+        model: str, 
+        role: str, 
+        iters: int, 
+        llm_calls_count: int, 
+        total_tool_calls: int, 
+        elapsed_ms: int,
+        write_completed: bool,
+        seen_write_intent: bool,
+        must_write: bool
+    ) -> Dict[str, Any]:
+        """Generate a comprehensive, personality-aware response when hitting iteration limits."""
+        try:
+            # Analyze what was accomplished
+            tool_summary = self._analyze_tool_execution_summary(messages)
+            key_findings = self._extract_key_findings(messages)
+            pending_tools = self._get_pending_tool_calls(messages)
+            
+            # Determine the situation and appropriate tone
+            if write_completed:
+                situation = "completed_with_validation_needed"
+                tone = "accomplished_but_incomplete"
+            elif seen_write_intent and not write_completed:
+                situation = "write_attempted_but_failed"
+                tone = "helpful_but_limited"
+            elif tool_summary["successful_tools"] > 0:
+                situation = "partial_success"
+                tone = "helpful_but_limited"
+            else:
+                situation = "minimal_progress"
+                tone = "apologetic_but_helpful"
+            
+            # Build context for the LLM to generate a personalized response
+            context_prompt = self._build_iteration_limit_context(
+                situation, tone, iters, llm_calls_count, total_tool_calls, 
+                elapsed_ms, tool_summary, key_findings, must_write, pending_tools
+            )
+            
+            # Create a focused prompt for the final response
+            final_messages = [
+                {
+                    "role": "system",
+                    "content": context_prompt
+                },
+                {
+                    "role": "user", 
+                    "content": "Generate a final response that's warm, helpful, and transparent about what I accomplished and what might be next."
+                }
+            ]
+            
+            # Generate the final response using the LLM
+            try:
+                response = await self._achat_once(final_messages, model, role, tool_choice_override="none")
+                return response
+            except Exception:
+                # Fallback to a structured response if LLM generation fails
+                return self._generate_fallback_iteration_response(
+                    situation, tone, tool_summary, key_findings, elapsed_ms, pending_tools
+                )
+                
+        except Exception:
+            # Ultimate fallback
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "I hit my iteration limit while working on your request. I've done my best to help, but I may not have completed everything you needed. Feel free to ask me to try again or be more specific about what you're looking for!"
+                        }
+                    }
+                ]
+            }
+
+    def _build_iteration_limit_context(
+        self, 
+        situation: str, 
+        tone: str, 
+        iters: int, 
+        llm_calls_count: int, 
+        total_tool_calls: int, 
+        elapsed_ms: int,
+        tool_summary: Dict[str, Any],
+        key_findings: List[str],
+        must_write: bool,
+        pending_tools: List[str] = None
+    ) -> str:
+        """Build context for the LLM to generate an appropriate iteration limit response."""
+        
+        # Base context about the situation
+        base_context = f"""You are MovieBot. I've reached my iteration limit ({iters} iterations) while working on a user request.
+
+EXECUTION SUMMARY:
+- Total time: {elapsed_ms/1000:.1f} seconds
+- LLM calls made: {llm_calls_count}
+- Tools executed: {total_tool_calls}
+- Success rate: {tool_summary['success_rate']:.1%}
+- Tool families used: {', '.join(tool_summary['tool_families']) or 'none'}
+
+KEY FINDINGS: {', '.join(key_findings) if key_findings else 'Limited progress made'}"""
+
+        # Add pending tools information if available
+        if pending_tools:
+            base_context += f"\n\nPENDING TOOLS: {', '.join(pending_tools)} (these were requested but couldn't be executed due to iteration limit)"
+
+        base_context += f"""
+
+SITUATION: {situation.upper().replace('_', ' ')}
+TONE: {tone.upper().replace('_', ' ')}"""
+
+        # Add situation-specific guidance
+        if situation == "completed_with_validation_needed":
+            base_context += """
+
+You successfully completed the main task but may need validation. Be positive about what was accomplished while being honest about potential limitations."""
+        
+        elif situation == "write_attempted_but_failed":
+            base_context += """
+
+You attempted write operations but they may not have succeeded. Be helpful about what was tried and suggest next steps."""
+        
+        elif situation == "partial_success":
+            base_context += """
+
+You made good progress gathering information but may not have completed the full request. Highlight what you found and suggest how to proceed."""
+        
+        else:  # minimal_progress
+            base_context += """
+
+You made limited progress. Be honest about the limitations while remaining helpful and suggesting alternative approaches."""
+
+        # Add specific guidance based on whether writes were required
+        if must_write:
+            base_context += """
+
+IMPORTANT: The user's request required write operations. If you couldn't complete the writes, be clear about this and suggest specific next steps."""
+
+        # Add personality and format guidance
+        base_context += """
+
+RESPONSE REQUIREMENTS:
+- Stay warm, friendly, and decisive (your core personality)
+- Be transparent about what you accomplished and what you couldn't complete
+- Use plain, upbeat language
+- Keep under 700 characters
+- Use '-' bullets for lists
+- Suggest specific next steps when appropriate
+- Don't expose internal reasoning or technical details
+- Be honest about limitations while remaining helpful
+
+Generate a response that acknowledges the iteration limit while being genuinely helpful about what was accomplished and what the user should do next."""
+
+        return base_context
+
+    def _generate_fallback_iteration_response(
+        self, 
+        situation: str, 
+        tone: str, 
+        tool_summary: Dict[str, Any], 
+        key_findings: List[str], 
+        elapsed_ms: int,
+        pending_tools: List[str] = None
+    ) -> Dict[str, Any]:
+        """Generate a structured fallback response when LLM generation fails."""
+        
+        # Build response based on situation
+        if situation == "completed_with_validation_needed":
+            content = "I've completed your request! ✅ I may need to do a quick validation check, but the main work is done."
+        elif situation == "write_attempted_but_failed":
+            content = "I tried to complete your request but ran into some issues. Let me help you figure out the next steps."
+        elif situation == "partial_success":
+            content = "I found some great stuff for you! Here's what I discovered before hitting my limit."
+        else:
+            content = "I hit my iteration limit while working on your request. Let me help you with what I found."
+        
+        # Add key findings if available
+        if key_findings:
+            content += f"\n\nKey findings:\n" + "\n".join(f"- {finding}" for finding in key_findings[:3])
+        
+        # Add execution summary
+        if tool_summary["total_tools"] > 0:
+            content += f"\n\nI executed {tool_summary['total_tools']} tools in {elapsed_ms/1000:.1f}s with a {tool_summary['success_rate']:.0%} success rate."
+        
+        # Add pending tools information if available
+        if pending_tools:
+            content += f"\n\nI was about to run: {', '.join(pending_tools)} but hit my limit."
+        
+        # Add next steps
+        if situation in ["write_attempted_but_failed", "minimal_progress"]:
+            content += "\n\nNext steps: Try asking me again with more specific details, or let me know if you'd like me to try a different approach!"
+        
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": content
+                    }
+                }
+            ]
+        }
+
 
     async def aconverse(self, messages: List[Dict[str, str]], stream_final_to_callback: Optional[Callable[[str], Any]] = None) -> Dict[str, Any]:
         """Async version of converse for non-blocking operations."""
@@ -1047,6 +1504,121 @@ class Agent:
         _, sel = resolve_llm_selection(self.project_root, "smart")
         model = sel.get("model", "gpt-5")
         return await self._arun_tools_loop(messages, model=model, role="smart")
+
+    def _classify_query_complexity(self, msgs: List[Dict[str, Any]]) -> str:
+        """Classify query complexity to determine optimal iteration strategy."""
+        try:
+            text_parts: List[str] = [str(m.get("content", "")) for m in msgs if m.get("role") == "user"]
+            text = "\n".join(text_parts).lower()
+            if not text.strip():
+                return "unknown"
+            
+            # Simple queries that can complete in 1-2 iterations
+            simple_patterns = [
+                "what's new", "what's recently added", "show me newest", "show me latest",
+                "what's in my library", "show me my movies", "show me my tv",
+                "oldest movies", "newest movies", "best rated", "most played",
+                "system status", "what's downloading", "queue status",
+                "trending", "popular movies", "popular tv"
+            ]
+            
+            if any(pattern in text for pattern in simple_patterns):
+                return "simple"
+            
+            # Medium complexity queries (2-3 iterations)
+            medium_patterns = [
+                "action movies", "horror movies", "comedy movies", "drama movies",
+                "movies from", "tv shows from", "movies in", "tv shows in",
+                "similar to", "like", "recommendations", "suggest",
+                "rate this", "rating", "stars"
+            ]
+            
+            if any(pattern in text for pattern in medium_patterns):
+                return "medium"
+            
+            # Complex queries (3-6 iterations)
+            complex_patterns = [
+                "add", "download", "monitor", "remove", "delete",
+                "update", "change", "modify", "configure",
+                "search for", "find", "look for", "discover"
+            ]
+            
+            if any(pattern in text for pattern in complex_patterns):
+                return "complex"
+            
+            return "medium"  # Default to medium complexity
+        except Exception:
+            return "unknown"
+
+    def _get_optimal_iteration_limit(self, complexity: str, role: str) -> int:
+        """Determine optimal iteration limit based on query complexity and role."""
+        base_limits = {
+            "agent": {"simple": 2, "medium": 4, "complex": 6, "unknown": 4},
+            "worker": {"simple": 1, "medium": 2, "complex": 3, "unknown": 2},
+            "chat": {"simple": 2, "medium": 4, "complex": 6, "unknown": 4},
+            "smart": {"simple": 2, "medium": 4, "complex": 6, "unknown": 4}
+        }
+        return base_limits.get(role, base_limits["agent"]).get(complexity, 4)
+
+    def _get_query_template(self, msgs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Get query template for common patterns to optimize tool selection."""
+        try:
+            text_parts: List[str] = [str(m.get("content", "")) for m in msgs if m.get("role") == "user"]
+            text = "\n".join(text_parts).lower()
+            if not text.strip():
+                return None
+            
+            # Template patterns for common queries
+            templates = {
+                "whats_new": {
+                    "patterns": ["what's new", "what's recently added", "show me newest", "show me latest"],
+                    "tools": ["get_plex_recently_added", "get_plex_library_sections"],
+                    "description": "Show recently added content"
+                },
+                "library_browse": {
+                    "patterns": ["what's in my library", "show me my movies", "show me my tv", "browse library"],
+                    "tools": ["search_plex", "get_plex_library_sections"],
+                    "description": "Browse library content"
+                },
+                "system_status": {
+                    "patterns": ["system status", "what's downloading", "queue status", "status"],
+                    "tools": ["radarr_system_status", "sonarr_system_status", "get_plex_library_sections"],
+                    "description": "Check system status"
+                },
+                "trending": {
+                    "patterns": ["trending", "popular movies", "popular tv", "what's popular"],
+                    "tools": ["tmdb_trending", "search_plex"],
+                    "description": "Show trending content"
+                },
+                "genre_discovery": {
+                    "patterns": ["action movies", "horror movies", "comedy movies", "drama movies"],
+                    "tools": ["tmdb_discover_movies", "search_plex"],
+                    "description": "Discover movies by genre"
+                },
+                "year_discovery": {
+                    "patterns": ["movies from", "tv shows from", "movies in", "tv shows in"],
+                    "tools": ["tmdb_discover_movies", "tmdb_discover_tv", "search_plex"],
+                    "description": "Discover content by year"
+                },
+                "similar_content": {
+                    "patterns": ["similar to", "like", "recommendations", "suggest"],
+                    "tools": ["tmdb_similar_movies", "tmdb_similar_tv", "search_plex"],
+                    "description": "Find similar content"
+                }
+            }
+            
+            # Find matching template
+            for template_name, template_data in templates.items():
+                if any(pattern in text for pattern in template_data["patterns"]):
+                    return {
+                        "name": template_name,
+                        "tools": template_data["tools"],
+                        "description": template_data["description"]
+                    }
+            
+            return None
+        except Exception:
+            return None
 
     async def _process_results_async(self, flattened_results: List[tuple]) -> List[Dict[str, Any]]:
         """Process tool results asynchronously for better performance.
