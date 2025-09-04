@@ -203,27 +203,15 @@ class PlexClient:
         actors = [a for a in (actors or []) if str(a).strip()]
         directors = [d for d in (directors or []) if str(d).strip()]
 
-        # Try to use Plex's native filtering first (most efficient)
-        try:
-            # Build comprehensive search parameters
-            search_kwargs = dict(base_kwargs)
-            search_kwargs.update({
-                "maxresults": limit,
-                "sort": sort_param
-            })
-            
-            # Add list filters if they exist (Plex supports OR within categories)
-            if genres:
-                search_kwargs["genre"] = genres[0]  # Plex API limitation: single genre per call
-            if actors:
-                search_kwargs["actor"] = actors[0]  # Plex API limitation: single actor per call
-            if directors:
-                search_kwargs["director"] = directors[0]  # Plex API limitation: single director per call
-            
-            items = section.search(**search_kwargs)
-            
-        except Exception:
-            # Fallback to multiple calls with intersection (less efficient but more reliable)
+        # Determine if we need to use intersection method
+        # Use intersection if we have multiple values in any category OR if we have both title and list filters
+        use_intersection = (
+            len(genres) > 1 or len(actors) > 1 or len(directors) > 1 or
+            (title and (genres or actors or directors))
+        )
+
+        if use_intersection:
+            # Use intersection method for complex filtering
             try:
                 items = self._search_with_intersection(
                     section, base_kwargs, genres, actors, directors, 
@@ -236,6 +224,40 @@ class PlexClient:
                     items = section.search(maxresults=limit, sort=sort_param, **fallback_kwargs)
                 except Exception:
                     items = []
+        else:
+            # Try to use Plex's native filtering first (most efficient)
+            try:
+                # Build comprehensive search parameters
+                search_kwargs = dict(base_kwargs)
+                search_kwargs.update({
+                    "maxresults": limit,
+                    "sort": sort_param
+                })
+                
+                # Add list filters if they exist (Plex supports single value per call)
+                if genres:
+                    search_kwargs["genre"] = genres[0]  # Plex API limitation: single genre per call
+                if actors:
+                    search_kwargs["actor"] = actors[0]  # Plex API limitation: single actor per call
+                if directors:
+                    search_kwargs["director"] = directors[0]  # Plex API limitation: single director per call
+                
+                items = section.search(**search_kwargs)
+                
+            except Exception:
+                # Fallback to intersection method
+                try:
+                    items = self._search_with_intersection(
+                        section, base_kwargs, genres, actors, directors, 
+                        sort_param, limit, sort_key, direction
+                    )
+                except Exception:
+                    # Final fallback: minimal search
+                    try:
+                        fallback_kwargs = {k: v for k, v in base_kwargs.items() if k == "title"}
+                        items = section.search(maxresults=limit, sort=sort_param, **fallback_kwargs)
+                    except Exception:
+                        items = []
 
         return self._serialize_items(items, response_level)
 
