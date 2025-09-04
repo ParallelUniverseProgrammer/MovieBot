@@ -32,6 +32,94 @@ def ephemeral_embed(title: str, description: str) -> discord.Embed:
     return embed
 
 
+class ProgressCalculator:
+    """Calculates meaningful progress percentages based on agent work phases."""
+    
+    def __init__(self):
+        self.reset()
+    
+    def reset(self):
+        """Reset progress tracking state."""
+        self.agent_started = False
+        self.llm_calls = 0
+        self.tool_calls = 0
+        self.tool_completions = 0
+        self.current_phase = None
+        self.iteration = 0
+        self.max_iterations = 6  # Default max iterations
+    
+    def calculate_progress(self, event_type: str, data: dict = None) -> float:
+        """Calculate progress percentage based on event type and data."""
+        if event_type == "agent.start":
+            self.agent_started = True
+            self.max_iterations = data.get("iters", 6) if data else 6
+            return 0.05  # 5% - just started
+        
+        elif event_type == "thinking":
+            self.iteration = data.get("iteration", "1/6").split("/")[0] if data else 1
+            try:
+                iter_num = int(self.iteration)
+                # Thinking phase: 5-15% of total progress
+                return 0.05 + (iter_num - 1) * 0.02
+            except (ValueError, TypeError):
+                return 0.10
+        
+        elif event_type == "llm.start":
+            self.llm_calls += 1
+            # LLM calls: 15-25% of total progress
+            return 0.15 + min(self.llm_calls * 0.02, 0.10)
+        
+        elif event_type == "llm.finish":
+            # LLM completion: 25-35% of total progress
+            return 0.25 + min(self.llm_calls * 0.02, 0.10)
+        
+        elif event_type == "tool.start":
+            self.tool_calls += 1
+            # Tool execution: 35-65% of total progress
+            return 0.35 + min(self.tool_calls * 0.05, 0.30)
+        
+        elif event_type == "tool.finish":
+            self.tool_completions += 1
+            # Tool completion: 65-85% of total progress
+            return 0.65 + min(self.tool_completions * 0.05, 0.20)
+        
+        elif event_type == "tool.error":
+            # Tool error still counts as progress
+            self.tool_completions += 1
+            return 0.65 + min(self.tool_completions * 0.05, 0.20)
+        
+        elif event_type.startswith("phase."):
+            self.current_phase = event_type
+            # Phase work: 85-95% of total progress
+            phase_progress = 0.85
+            if "validation" in event_type:
+                phase_progress = 0.90
+            elif "read_only" in event_type:
+                phase_progress = 0.88
+            elif "write_enabled" in event_type:
+                phase_progress = 0.92
+            return phase_progress
+        
+        elif event_type == "agent.finish":
+            return 1.0  # 100% - completed
+        
+        elif event_type == "agent.metrics":
+            # Near completion: 95-99%
+            return 0.95
+        
+        # Default fallback based on current state
+        if self.tool_completions > 0:
+            return 0.70 + min(self.tool_completions * 0.05, 0.25)
+        elif self.tool_calls > 0:
+            return 0.50 + min(self.tool_calls * 0.03, 0.20)
+        elif self.llm_calls > 0:
+            return 0.30 + min(self.llm_calls * 0.02, 0.15)
+        elif self.agent_started:
+            return 0.10
+        else:
+            return 0.05
+
+
 def _get_clever_progress_message(
     iteration: int, tool_name: str = None, progress_type: str = None
 ) -> str:
@@ -460,13 +548,17 @@ class MovieBotClient(discord.Client):
 
                 async def progress_updater():
                     """Update the progress message only when real events occur, but not too often."""
-                    nonlocal progress_message, last_rendered, iteration_counter
+                    nonlocal progress_message, last_rendered
                     # Load throttling knobs
                     rc_local = load_runtime_config(self.project_root)  # type: ignore[attr-defined]
                     min_update_ms = int(rc_local.get("ux", {}).get("progressUpdateIntervalMs", 5000))
                     freq = int(rc_local.get("ux", {}).get("progressUpdateFrequency", 3))
                     last_edit_ms = 0.0
                     event_counter = 0
+                    
+                    # Initialize progress calculator
+                    progress_calc = ProgressCalculator()
+                    
                     try:
                         # Wait until either done or threshold elapses
                         await asyncio.wait_for(done.wait(), timeout=progress_ms / 1000)
@@ -481,8 +573,9 @@ class MovieBotClient(discord.Client):
                         except asyncio.TimeoutError:
                             evt = {"type": "thinking", "details": ""}
 
-                        iteration_counter += 1
-                        initial = _get_clever_progress_message(iteration_counter,  # type: ignore[attr-defined]
+                        # Calculate progress based on event type
+                        progress_value = progress_calc.calculate_progress(evt.get("type"), evt)
+                        initial = _get_clever_progress_message(1,  # type: ignore[attr-defined]
                                                                evt.get("details"),
                                                                evt.get("type"))
                         
@@ -490,7 +583,7 @@ class MovieBotClient(discord.Client):
                         progress_embed = MovieBotEmbeds.create_progress_embed(
                             "MovieBot Working",
                             initial,
-                            progress=min(iteration_counter * 0.1, 0.9),
+                            progress=progress_value,
                             status="working"
                         )
                         progress_message = await message.channel.send(embed=progress_embed, silent=True)
@@ -519,15 +612,16 @@ class MovieBotClient(discord.Client):
                             if not should_update:
                                 continue
 
+                            # Calculate progress based on event type
+                            progress_value = progress_calc.calculate_progress(ptype, evt)
                             tool_name = evt.get("details")
-                            iteration_counter += 1
-                            new_message = _get_clever_progress_message(iteration_counter, tool_name, ptype)  # type: ignore[attr-defined]
+                            new_message = _get_clever_progress_message(event_counter, tool_name, ptype)  # type: ignore[attr-defined]
                             if progress_message and new_message != last_rendered:
-                                # Update progress embed
+                                # Update progress embed with calculated progress
                                 updated_embed = MovieBotEmbeds.create_progress_embed(
                                     "MovieBot Working",
                                     new_message,
-                                    progress=min(iteration_counter * 0.1, 0.9),
+                                    progress=progress_value,
                                     status="working"
                                 )
                                 await progress_message.edit(embed=updated_embed)
