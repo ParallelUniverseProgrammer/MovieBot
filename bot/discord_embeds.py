@@ -740,13 +740,10 @@ class MovieBotEmbeds:
             url=TMDBUtils.tmdb_url("movie", tmdb_id),
         )
 
-        # Thumbnail and image
+        # Thumbnail (poster)
         poster_url = TMDBUtils.tmdb_image(poster_path, size="w500")
         if poster_url:
             embed.set_thumbnail(url=poster_url)
-        backdrop_url = TMDBUtils.tmdb_image(backdrop_path, size="w1280")
-        if backdrop_url:
-            embed.set_image(url=backdrop_url)
 
         # Rating
         EmbedBuilder.safe_add_field(
@@ -972,13 +969,10 @@ class MovieBotEmbeds:
             url=TMDBUtils.tmdb_url("tv", tmdb_id),
         )
 
-        # Images
+        # Thumbnail (poster)
         poster_url = TMDBUtils.tmdb_image(poster_path, size="w500")
         if poster_url:
             embed.set_thumbnail(url=poster_url)
-        backdrop_url = TMDBUtils.tmdb_image(backdrop_path, size="w1280")
-        if backdrop_url:
-            embed.set_image(url=backdrop_url)
 
         # Rating
         EmbedBuilder.safe_add_field(
@@ -1179,13 +1173,10 @@ class MovieBotEmbeds:
             timestamp=MovieBotEmbeds._get_local_timestamp(),
         )
 
-        # Add thumbnail and backdrop using robust URL resolution
+        # Add thumbnail using robust URL resolution
         thumb_url = MovieBotEmbeds._resolve_plex_url(plex_base_url, thumb)
         if thumb_url:
             embed.set_thumbnail(url=thumb_url)
-        art_url = MovieBotEmbeds._resolve_plex_url(plex_base_url, art)
-        if art_url:
-            embed.set_image(url=art_url)
 
         # Add rating if available
         if rating and float(rating) > 0:
@@ -1506,13 +1497,10 @@ class MovieBotEmbeds:
             timestamp=MovieBotEmbeds._get_local_timestamp(),
         )
 
-        # Images (if TMDb-like paths provided)
+        # Thumbnail (if TMDb-like paths provided)
         poster_url = TMDBUtils.tmdb_image(poster_path, "w500")
         if poster_url:
             embed.set_thumbnail(url=poster_url)
-        backdrop_url = TMDBUtils.tmdb_image(backdrop_path, "w1280")
-        if backdrop_url:
-            embed.set_image(url=backdrop_url)
 
         # Add item count
         EmbedBuilder.safe_add_field(embed, "📊 Items", f"{count} items", True)

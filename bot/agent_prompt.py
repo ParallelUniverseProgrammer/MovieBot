@@ -171,7 +171,10 @@ class PromptComponents:
             "DECISION TREE (choose one path and batch accordingly):\n"
             "- Library search → search_plex (sorted) → if empty: intelligent_search / "
             "smart_recommendations\n"
-            "- Actor-based → search_plex(filters:{actors:['Name']}) → present\n"
+            "- Actor-based (person names like 'James Spader', 'Tom Hanks') → "
+            "search_plex(filters:{actors:['Name']}) → present\n"
+            "- Title-based (movie/show names like 'The Matrix', 'Breaking Bad') → "
+            "search_plex(query:'Title') → present\n"
             "- Discovery → tmdb_discovery_suite → search_plex\n"
             "- Movie details → tmdb_search (details included) → present\n"
             "- TV details → tmdb_search_tv (details included) → present\n"
@@ -227,6 +230,8 @@ class PromptComponents:
             "sort_by:'year', sort_order:'asc'}) → present.\n"
             "- Movies with Nicolas Cage: Batch1 → search_plex(filters:{actors:"
             "['Nicolas Cage'], sort_by:'year', sort_order:'desc'}) → present.\n"
+            "- James Spader movies: Batch1 → search_plex(filters:{actors:"
+            "['James Spader'], sort_by:'year', sort_order:'desc'}) → present.\n"
             "- Similar to Inception: Batch1 → tmdb_movie_details(27205, "
             "append_to_response:'credits,videos,images') + tmdb_similar_movies(27205)"
             " + search_plex('Inception') → present."
@@ -266,6 +271,21 @@ class PromptComponents:
             "- Vague queries: smart_recommendations + search_plex\n"
             "- Unknown media type: use tmdb_search_multi; present best 3 total.\n"
             "- Consult household preferences when helpful."
+        )
+
+    @staticmethod
+    def query_type_detection() -> str:
+        return (
+            "QUERY TYPE DETECTION:\n"
+            "- Person names (actors/directors): Use actor filter, not title query\n"
+            "  * 'James Spader' → search_plex(filters:{actors:['James Spader']})\n"
+            "  * 'Tom Hanks movies' → search_plex(filters:{actors:['Tom Hanks']})\n"
+            "- Movie/show titles: Use title query\n"
+            "  * 'The Matrix' → search_plex(query:'The Matrix')\n"
+            "  * 'Breaking Bad' → search_plex(query:'Breaking Bad')\n"
+            "- Mixed: Use both approaches in parallel\n"
+            "  * 'James Spader in The Matrix' → search_plex(query:'The Matrix') + "
+            "search_plex(filters:{actors:['James Spader']})"
         )
 
     @staticmethod
@@ -397,6 +417,7 @@ def build_minimal_system_prompt() -> str:
             c.error_handling(),
             c.fallback_strategies(),
             c.ambiguous_request_handling(),
+            c.query_type_detection(),
             c.preference_driven_intelligence(),
             c.context_awareness(),
             c.parameter_validation(),
