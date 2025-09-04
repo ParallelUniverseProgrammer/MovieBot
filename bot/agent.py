@@ -247,18 +247,18 @@ class Agent:
                     return 1.0  # Write success is always high confidence
                 
                 # Read tool scoring based on content quality
-                score = 0.5  # Increased base score for successful read
+                score = 0.8  # Much higher base score for successful read operations
                 
                 # Content richness bonus - more generous for simple queries
                 for key in ("items", "results", "movies", "series", "episodes", "playlists", "collections"):
                     val = result.get(key)
                     if isinstance(val, list):
                         if len(val) > 0:
-                            score += 0.4  # Increased bonus for having content
+                            score += 0.5  # Increased bonus for having content (was 0.4)
                         if len(val) >= 1:  # Lowered threshold - even 1 item gets rich content bonus
-                            score += 0.2  # Rich content bonus
+                            score += 0.3  # Rich content bonus (was 0.2)
                         if len(val) >= 5:  # Lowered threshold for very rich content
-                            score += 0.1  # Very rich content
+                            score += 0.2  # Very rich content (was 0.1)
                 
                 # Metadata richness bonus - more generous scoring
                 metadata_keys = ["title", "year", "rating", "genre", "summary", "description", "overview", "tagline"]
@@ -293,7 +293,7 @@ class Agent:
             confidence = self._calculate_result_confidence(tool_name_and_results)
             
             # High confidence threshold for finalization - lowered for better responsiveness
-            if confidence >= 0.6:
+            if confidence >= 0.2:  # Much more lenient for read-only queries
                 return True
             
             # Check for write success (always finalizable)
@@ -321,7 +321,7 @@ class Agent:
                 return False
             
             # Medium confidence with some content - lowered for better responsiveness
-            return confidence >= 0.3
+            return confidence >= 0.1  # Much more lenient for read-only queries
         except Exception:
             return False
 
@@ -1060,7 +1060,21 @@ class Agent:
                     "content": "Validation complete. Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Be warm, friendly, and decisive. Use plain, upbeat language. Do not call tools."
                 })
                 try:
-                    resp = await self._achat_once(messages, model, role, tool_choice_override="none")
+                    # Use quick model for finalization after validation
+                    try:
+                        from config.loader import resolve_llm_selection
+                        quick_provider, quick_sel = resolve_llm_selection(self.project_root, "quick")
+                        quick_model = quick_sel.get("model")
+                        
+                        if quick_model and quick_provider == provider:
+                            self.log.info(f"Using quick model {quick_model} for post-validation finalization")
+                            resp = await self._achat_once(messages, quick_model, "quick", tool_choice_override="none")
+                        else:
+                            resp = await self._achat_once(messages, model, role, tool_choice_override="none")
+                    except Exception as e:
+                        self.log.warning(f"Failed to use quick model for post-validation finalization: {e}, falling back to {model}")
+                        resp = await self._achat_once(messages, model, role, tool_choice_override="none")
+                    
                     try:
                         if getattr(self, "progress", None) is not None:
                             self.progress.stop_heartbeat("agent")
@@ -1101,6 +1115,24 @@ class Agent:
                             "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Be warm, friendly, and decisive. Use plain, upbeat language. Do not call tools."
                         })
                         
+                        # Use quick model for finalization when we have all the info we need
+                        try:
+                            from config.loader import resolve_llm_selection
+                            quick_provider, quick_sel = resolve_llm_selection(self.project_root, "quick")
+                            quick_model = quick_sel.get("model")
+                            quick_params = dict(quick_sel.get("params", {}))
+                            
+                            # Use quick model for finalization
+                            if quick_model and quick_provider == provider:
+                                self.log.info(f"Using quick model {quick_model} for finalization")
+                                final_response = await self._achat_once(messages, quick_model, "quick", tool_choice_override="none")
+                            else:
+                                # Fallback to original model if quick model not available
+                                final_response = await self._achat_once(messages, model, role, tool_choice_override="none")
+                        except Exception as e:
+                            self.log.warning(f"Failed to use quick model for finalization: {e}, falling back to {model}")
+                            final_response = await self._achat_once(messages, model, role, tool_choice_override="none")
+                        
                         if stream_final_to_callback is not None and is_simple_readonly:
                             # Use streaming for simple read-only queries
                             try:
@@ -1125,7 +1157,7 @@ class Agent:
                                 except Exception:
                                     pass
                                 await self._emit_progress("agent.finish", {"reason": "final_answer_streamed"})
-                                return await self._achat_once(messages, model, role, tool_choice_override="none")
+                                return final_response
                             except Exception:
                                 force_finalize_next = True
                         elif stream_final_to_callback is not None:
@@ -1387,21 +1419,34 @@ class Agent:
                 elapsed_ms, tool_summary, key_findings, must_write, pending_tools
             )
             
-            # Create a focused prompt for the final response
-            final_messages = [
+            # Create a focused prompt for the final response using the full conversation context
+            final_messages = messages + [
                 {
                     "role": "system",
-                    "content": context_prompt
-                },
-                {
-                    "role": "user", 
-                    "content": "Generate a final response that's warm, helpful, and transparent about what I accomplished and what might be next."
+                    "content": "Finalize now: produce a concise, friendly user-facing reply with no meta-instructions or headings. Be warm, friendly, and decisive. Use plain, upbeat language. Do not call tools. Use the information gathered from tools to answer the user's question directly."
                 }
             ]
             
-            # Generate the final response using the LLM
+            # Generate the final response using the quick model
             try:
-                response = await self._achat_once(final_messages, model, role, tool_choice_override="none")
+                # Try to use quick model for finalization
+                try:
+                    from config.loader import resolve_llm_selection
+                    quick_provider, quick_sel = resolve_llm_selection(self.project_root, "quick")
+                    quick_model = quick_sel.get("model")
+                    
+                    # Determine the provider for the original model
+                    original_provider, _ = resolve_llm_selection(self.project_root, role)
+                    
+                    if quick_model and quick_provider == original_provider:
+                        self.log.info(f"Using quick model {quick_model} for iteration limit finalization")
+                        response = await self._achat_once(final_messages, quick_model, "quick", tool_choice_override="none")
+                    else:
+                        response = await self._achat_once(final_messages, model, role, tool_choice_override="none")
+                except Exception as e:
+                    self.log.warning(f"Failed to use quick model for iteration limit finalization: {e}, falling back to {model}")
+                    response = await self._achat_once(final_messages, model, role, tool_choice_override="none")
+                
                 return response
             except Exception:
                 # Fallback to a structured response if LLM generation fails
