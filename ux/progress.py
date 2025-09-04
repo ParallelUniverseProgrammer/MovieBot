@@ -65,7 +65,7 @@ class AsyncProgressBroadcaster:
     async def emit(self, event_type: str, data: Any) -> None:
         # Unthrottled control events (make fewer unthrottled to reduce chatter)
         # Keep only top-level lifecycle unthrottled
-        unthrottled = {"agent.start", "agent.finish"}
+        unthrottled = {"agent.start", "agent.finish", "thinking", "phase.read_only", "phase.write_enabled", "phase.validation"}
         now = time.monotonic()
         if event_type not in unthrottled:
             last = self._last_emit_per_type.get(event_type, 0.0)

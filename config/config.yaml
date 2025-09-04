@@ -32,7 +32,7 @@ llm:
       quick:
         model: gpt-4.1-nano
         params:
-          max_tokens: 250
+          max_tokens: 500
       summarizer:
         model: gpt-4.1-mini
         #reasoningEffort: minimal
@@ -77,9 +77,9 @@ tools:
     openAfterFailures: 3
     openForMs: 3000
 ux:
-  progressThresholdMs: 3000
-  progressUpdateIntervalMs: 5000
-  progressUpdateFrequency: 4
+  progressThresholdMs: 1000        # Show progress after 1 second (faster feedback)
+  progressUpdateIntervalMs: 1000   # Update every 1 second (more responsive)
+  progressUpdateFrequency: 1       # Update on every event (smoother progress)
   heartbeatIntervalMs: 2500
   typingPulseMs: 9000
 http:

@@ -605,9 +605,11 @@ class MovieBotClient(discord.Client):
                             event_counter += 1
                             now_ms = time.monotonic() * 1000.0
                             should_update = False
-                            if (now_ms - last_edit_ms) >= max(500, min_update_ms):
+                            # Update based on time interval (respect config)
+                            if (now_ms - last_edit_ms) >= min_update_ms:
                                 should_update = True
-                            elif freq > 1 and (event_counter % freq == 0):
+                            # Also update on every event if frequency is 1, or every Nth event
+                            elif freq == 1 or (freq > 1 and (event_counter % freq == 0)):
                                 should_update = True
                             if not should_update:
                                 continue
