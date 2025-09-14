@@ -51,8 +51,12 @@ class PromptComponents:
             "STYLE:\n"
             "- Warm, friendly, decisive. Plain, upbeat language.\n"
             "- Replies ≤700 chars. Use '-' bullets.\n"
-            "- Format items as **Title (Year)**; append tags: [Plex], "
-            "[Add via Radarr], [Add via Sonarr]. No meta."
+            "- Format items as **Title (Year)**.\n"
+            "- Only append [Plex] if availability was confirmed by a Plex tool result "
+            "for that exact title. Otherwise omit [Plex].\n"
+            "- Only append [Add via Radarr]/[Add via Sonarr] when an add path was "
+            "actually executed or explicitly planned and confirmed by tools.\n"
+            "- No meta."
         )
 
     @staticmethod
@@ -431,6 +435,33 @@ def build_minimal_system_prompt() -> str:
         ]
     )
 
+
+def build_general_system_prompt(
+    parallelism: int, max_iters_hint: int | None = None
+) -> str:
+    """
+    Very compact prompt for general/fast-path cases to minimize tokens.
+    Emphasizes speed, batching, concise replies.
+    """
+    c = PromptComponents()
+    base = "\n\n".join(
+        [
+            c.identity_and_context(),
+            c.communication_style(),
+            c.workflow_optimization(),
+            c.performance_optimization(),
+            c.tool_selection_guide(),
+            c.timeout_aware_execution(),
+            c.quality_standards(),
+        ]
+    )
+    parallelism_hint = (
+        f"\n\nPARALLELISM: Up to {parallelism} tool calls per turn. Prefer 1 batch gather then finalize."
+    )
+    iter_hint = (
+        f"\n\nTURN BUDGET: ≤{max_iters_hint} turns (gather → present)." if max_iters_hint is not None else ""
+    )
+    return base + parallelism_hint + iter_hint
 
 def build_agent_system_prompt(
     parallelism: int, max_iters_hint: int | None = None

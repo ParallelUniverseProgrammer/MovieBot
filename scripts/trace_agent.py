@@ -19,6 +19,13 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(_PROJECT_ROOT) not in _sys.path:
     _sys.path.insert(0, str(_PROJECT_ROOT))
 
+# Load environment variables from .env at project root
+try:
+    from dotenv import load_dotenv
+    load_dotenv(_PROJECT_ROOT / ".env")
+except Exception:
+    pass
+
 from config.loader import load_settings
 from bot.agent import Agent
 from bot.tools.registry_cache import initialize_registry_cache

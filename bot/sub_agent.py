@@ -37,8 +37,6 @@ class SubAgent:
         from config.loader import resolve_llm_selection
         _, sel = resolve_llm_selection(self.project_root, role)
         params = dict(sel.get("params", {}))
-        # gpt-5 family requires temperature exactly 1
-        params["temperature"] = 1
         tool_choice_value = tool_choice_override if tool_choice_override is not None else params.pop("tool_choice", "auto")
         params["tool_choice"] = tool_choice_value
         resp = self.llm.chat(
@@ -70,7 +68,6 @@ class SubAgent:
         from config.loader import resolve_llm_selection
         _, sel = resolve_llm_selection(self.project_root, role)
         params = dict(sel.get("params", {}))
-        params["temperature"] = 1
         tool_choice_value = tool_choice_override if tool_choice_override is not None else params.pop("tool_choice", "auto")
         params["tool_choice"] = tool_choice_value
         resp = await self.llm.achat(

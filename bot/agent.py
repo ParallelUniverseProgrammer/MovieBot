@@ -7,6 +7,8 @@ import asyncio
 import logging
 import threading
 import time
+import re
+import uuid
 
 from llm.clients import LLMClient
 from .agent_prompt import build_agent_system_prompt
@@ -90,6 +92,64 @@ class Agent:
             }
         except Exception:
             return {"complexity": "unknown", "confidence": 0.0, "reasoning": "Heuristic failed", "requires_write": False, "suggested_tools": [], "estimated_iterations": 2}
+
+    class _ToolCallFunction:
+        def __init__(self, name: str, arguments: str) -> None:
+            self.name = name
+            self.arguments = arguments
+
+    class _ToolCallLite:
+        def __init__(self, name: str, args: Dict[str, Any]) -> None:
+            self.id = str(uuid.uuid4())
+            self.type = "function"
+            import json as _json
+            self.function = Agent._ToolCallFunction(name, _json.dumps(args, separators=(",", ":")))
+
+    def _build_tool_call(self, name: str, args: Dict[str, Any]) -> Any:
+        return Agent._ToolCallLite(name, args)
+
+    def _detect_zero_llm_fastpath(self, msgs: List[Dict[str, Any]], *, must_write: bool) -> tuple[List[Any], str] | tuple[None, None]:
+        try:
+            if must_write:
+                return None, None
+            user_texts: List[str] = [str(m.get("content", "")) for m in msgs if m.get("role") == "user"]
+            text = "\n".join(user_texts).strip()
+            tl = text.lower()
+            tool_calls: List[Any] = []
+            finalize_instruction = ""
+
+            # Trending fast-path
+            if any(k in tl for k in ("trending", "what's trending", "whats trending")):
+                tool_calls.append(self._build_tool_call("tmdb_discovery_suite", {"discovery_types": ["trending"]}))
+                tool_calls.append(self._build_tool_call("search_plex", {"filters": {"sort_by": "addedAt", "sort_order": "desc"}, "limit": 4, "response_level": "compact"}))
+                finalize_instruction = "Finalize: top results with brief notes."
+                return tool_calls, finalize_instruction
+
+            # Library overview / recent additions fast-path
+            if any(k in tl for k in ("recently added", "what's new", "whats new", "on deck", "continue watching", "library")):
+                tool_calls.append(self._build_tool_call("plex_library_overview", {"section_type": "movie", "limit": 4, "response_level": "compact"}))
+                tool_calls.append(self._build_tool_call("plex_library_overview", {"section_type": "show", "limit": 4, "response_level": "compact"}))
+                finalize_instruction = "Finalize: concise library highlights."
+                return tool_calls, finalize_instruction
+
+            # Actor-based fast-path (e.g., "movies with Tom Hanks")
+            actor_name = None
+            m = re.search(r"(?:movies?|shows?)\s+(?:with|featuring|starring)\s+([A-Za-z][A-Za-z\.'\-]+(?:\s+[A-Za-z][A-Za-z\.'\-]+){1,3})", text, flags=re.IGNORECASE)
+            if m:
+                actor_name = m.group(1).strip()
+            else:
+                # Alternate phrasing: "with <Name> movies"
+                m2 = re.search(r"(?:with|featuring|starring)\s+([A-Za-z][A-Za-z\.'\-]+(?:\s+[A-Za-z][A-Za-z\.'\-]+){1,3})\s+(?:movies?|shows?)", text, flags=re.IGNORECASE)
+                if m2:
+                    actor_name = m2.group(1).strip()
+            if actor_name:
+                tool_calls.append(self._build_tool_call("search_plex", {"filters": {"actors": [actor_name], "sort_by": "year", "sort_order": "desc"}, "limit": 6, "response_level": "compact"}))
+                finalize_instruction = f"Finalize: best picks with {actor_name}."
+                return tool_calls, finalize_instruction
+
+            return None, None
+        except Exception:
+            return None, None
 
     def _get_role_selection(self, role: str) -> Dict[str, Any]:
         """Resolve and cache LLM selection for a role for this Agent instance."""
@@ -217,7 +277,6 @@ class Agent:
         if hasattr(self.llm, "achat"):
             sel = self._get_role_selection(role)
             params = dict(sel.get("params", {}))
-            params["temperature"] = 1
             tool_choice_value = tool_choice_override if tool_choice_override is not None else params.pop("tool_choice", "auto")
             tools_to_send = None if tool_choice_value == "none" else self.openai_tools
             if tools_to_send is not None:
@@ -235,7 +294,6 @@ class Agent:
             # No fallback - force async implementation
             sel = self._get_role_selection(role)
             params = dict(sel.get("params", {}))
-            params["temperature"] = 1
             tool_choice_value = tool_choice_override if tool_choice_override is not None else params.pop("tool_choice", "auto")
             tools_to_send = None if tool_choice_value == "none" else self.openai_tools
             if tools_to_send is not None:
@@ -860,9 +918,8 @@ class Agent:
         else:
             cfg_max_iters = int(llm_cfg.get("maxIters", 4))
         iters = max_iters or cfg_max_iters
-        # System message + optional dynamic household preferences context (for recommendations)
+        # Defer system prompt construction until after classification and write intent detection
         parallelism_for_prompt = int(rc.get("tools", {}).get("parallelism", 4))
-        # Compute max iterations for this role to pass as a hint into the system prompt
         llm_cfg_for_iters = rc.get("llm", {}) or {}
         if role in ("smart", "chat"):
             cfg_max_iters = int(llm_cfg_for_iters.get("agentMaxIters", llm_cfg_for_iters.get("maxIters", 8)))
@@ -870,7 +927,7 @@ class Agent:
             cfg_max_iters = int(llm_cfg_for_iters.get("workerMaxIters", llm_cfg_for_iters.get("maxIters", 8)))
         else:
             cfg_max_iters = int(llm_cfg_for_iters.get("maxIters", 8))
-        messages: List[Dict[str, Any]] = [{"role": "system", "content": build_agent_system_prompt(parallelism_for_prompt, cfg_max_iters)}]
+        messages: List[Dict[str, Any]] = []
         # Infer if user intent requires a write
         def _user_intent_requires_write(msgs: List[Dict[str, Any]]) -> bool:
             try:
@@ -893,16 +950,106 @@ class Agent:
 
 
 
-        # Query classification: use LLM only if enabled, else heuristic
+        # Zero-LLM fast-path for common read-only flows (run BEFORE classification to avoid extra LLM calls)
+        fast_calls, fast_finalize_hint = self._detect_zero_llm_fastpath(base_messages, must_write=False)
+        if fast_calls:
+            # Build a minimal system prompt for context
+            from .agent_prompt import build_general_system_prompt
+            messages.append({"role": "system", "content": build_general_system_prompt(parallelism_for_prompt, cfg_max_iters)})
+            messages += base_messages
+
+            # Append assistant tool_calls to execute
+            messages.append({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": tc.type,
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in fast_calls
+                ],
+            })
+
+            # Execute tools via existing batching logic
+            rc_exec = load_runtime_config(self.project_root)
+            timeout_ms = int(rc_exec.get("tools", {}).get("timeoutMs", 8000))
+            parallelism = int(rc_exec.get("tools", {}).get("parallelism", 4))
+            retry_max = int(rc_exec.get("tools", {}).get("retryMax", 2))
+            backoff_base_ms = int(rc_exec.get("tools", {}).get("backoffBaseMs", 200))
+
+            tool_groups = self._group_tool_calls_for_batching(fast_calls)
+
+            async def run_one_or_batch(tc_or_group):
+                if isinstance(tc_or_group, list):
+                    return await self._execute_tool_batch(tc_or_group, timeout_ms, retry_max, backoff_base_ms, {})
+                else:
+                    result = await self._execute_single_tool(tc_or_group, timeout_ms, retry_max, backoff_base_ms, {})
+                    return [result]
+
+            sem = asyncio.Semaphore(parallelism)
+
+            async def sem_wrapped(tc_or_group):
+                async with sem:
+                    return await run_one_or_batch(tc_or_group)
+
+            results = await asyncio.gather(*[sem_wrapped(tc_or_group) for tc_or_group in tool_groups])
+
+            flattened_results: List[tuple] = []
+            for result in results:
+                if isinstance(result, list):
+                    flattened_results.extend(result)
+                else:
+                    flattened_results.append(result)
+
+            processed_messages = await self._process_results_async(flattened_results)
+            messages.extend(processed_messages)
+
+            # Quick finalization step using quick model, with a retry-on-empty-content
+            try:
+                from config.loader import resolve_llm_selection
+                _, quick_sel = resolve_llm_selection(self.project_root, "quick")
+                quick_model = quick_sel.get("model") or "gpt-5-nano"
+            except Exception:
+                quick_model = "gpt-5-nano"
+
+            final_system = (fast_finalize_hint or "Finalize now: produce a concise, friendly list of 3 items max, each as 'Title (Year)'. Only include [Plex] tag if a Plex tool confirmed availability for that item; otherwise omit it. Do not call tools. Reply must be non-empty.")
+            messages.append({"role": "system", "content": final_system})
+            resp = await self._achat_once(messages, quick_model, "quick", tool_choice_override="none")
+            try:
+                content = resp.choices[0].message.content  # type: ignore[attr-defined]
+            except Exception:
+                content = None
+            if not content:
+                # Synthesize a minimal fallback from tool findings to avoid empty replies
+                try:
+                    findings = self._extract_key_findings(messages)
+                except Exception:
+                    findings = []
+                if findings:
+                    text = "Here’s what I found:\n" + "\n".join(f"- {f}" for f in findings[:3])
+                else:
+                    text = "I gathered results, but couldn’t format them right now. Try asking for trending movies or recent additions again."
+                resp = {"choices": [{"message": {"content": text}}]}
+            try:
+                if getattr(self, "progress", None) is not None:
+                    self.progress.stop_heartbeat("agent")
+            except Exception:
+                pass
+            await self._emit_progress("agent.finish", {"reason": "fast_path"})
+            return resp
+
+        # Query classification (LLM-based by default); on failure, return a neutral classification
         use_llm_cls = bool((rc.get("llm", {}) or {}).get("useLlmQueryClassification", False))
-        classification_result = None
         if use_llm_cls:
             try:
                 classification_result = await self._classify_query_complexity_llm(base_messages)
             except Exception:
-                classification_result = None
-        if classification_result is None:
-            classification_result = self._classify_query_complexity_heuristic(base_messages)
+                # Fall back to a lightweight heuristic to keep the flow moving
+                classification_result = self._classify_query_complexity_heuristic(base_messages)
+        else:
+            classification_result = {"complexity": "unknown", "confidence": 0.0, "reasoning": "classification_disabled", "requires_write": False, "suggested_tools": [], "estimated_iterations": 2}
         complexity = classification_result["complexity"]
         confidence = classification_result["confidence"]
         reasoning = classification_result["reasoning"]
@@ -929,6 +1076,29 @@ class Agent:
         
         must_write = requires_write or _user_intent_requires_write(base_messages)
         
+        # Optionally elevate to smart model for complex reasoning tasks
+        try:
+            if str(complexity).lower() == "complex" and not must_write:
+                from config.loader import resolve_llm_selection
+                _prov, smart_sel = resolve_llm_selection(self.project_root, "smart")
+                smart_model = smart_sel.get("model")
+                if smart_model:
+                    model = smart_model
+                    role = "smart"
+        except Exception:
+            pass
+
+        # Build system prompt now (compact for general; full for smart)
+        try:
+            from .agent_prompt import build_general_system_prompt
+            if role == "smart":
+                system_prompt_content = build_agent_system_prompt(parallelism_for_prompt, cfg_max_iters)
+            else:
+                system_prompt_content = build_general_system_prompt(parallelism_for_prompt, cfg_max_iters)
+            messages.append({"role": "system", "content": system_prompt_content})
+        except Exception:
+            messages.append({"role": "system", "content": build_agent_system_prompt(parallelism_for_prompt, cfg_max_iters)})
+
         # Emit optimization details
         optimization_info = {
             "parallelism": parallelism_for_prompt, 
@@ -986,6 +1156,79 @@ class Agent:
                 )
             })
         messages += base_messages
+
+        # Zero-LLM fast-path for common read-only flows
+        fast_calls, fast_finalize_hint = self._detect_zero_llm_fastpath(base_messages, must_write=must_write)
+        if fast_calls:
+            # Append assistant message with intended tool calls
+            messages.append({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": tc.type,
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in fast_calls
+                ],
+            })
+
+            # Execute tools using existing batching/execution logic
+            rc_exec = load_runtime_config(self.project_root)
+            timeout_ms = int(rc_exec.get("tools", {}).get("timeoutMs", 8000))
+            parallelism = int(rc_exec.get("tools", {}).get("parallelism", 4))
+            retry_max = int(rc_exec.get("tools", {}).get("retryMax", 2))
+            backoff_base_ms = int(rc_exec.get("tools", {}).get("backoffBaseMs", 200))
+
+            tool_groups = self._group_tool_calls_for_batching(fast_calls)
+
+            async def run_one_or_batch(tc_or_group):
+                if isinstance(tc_or_group, list):
+                    return await self._execute_tool_batch(tc_or_group, timeout_ms, retry_max, backoff_base_ms, {})
+                else:
+                    result = await self._execute_single_tool(tc_or_group, timeout_ms, retry_max, backoff_base_ms, {})
+                    return [result]
+
+            sem = asyncio.Semaphore(parallelism)
+
+            async def sem_wrapped(tc_or_group):
+                async with sem:
+                    return await run_one_or_batch(tc_or_group)
+
+            results = await asyncio.gather(*[sem_wrapped(tc_or_group) for tc_or_group in tool_groups])
+
+            flattened_results: List[tuple] = []
+            for result in results:
+                if isinstance(result, list):
+                    flattened_results.extend(result)
+                else:
+                    flattened_results.append(result)
+
+            processed_messages = await self._process_results_async(flattened_results)
+            messages.extend(processed_messages)
+
+            # Quick finalization step using quick model
+            try:
+                from config.loader import resolve_llm_selection
+                quick_provider, quick_sel = resolve_llm_selection(self.project_root, "quick")
+                quick_model = quick_sel.get("model")
+            except Exception:
+                quick_model = "gpt-5-nano"
+
+            messages.append({
+                "role": "system",
+                "content": (fast_finalize_hint or "Finalize now with a concise, friendly reply. Do not call tools."),
+            })
+
+            resp = await self._achat_once(messages, quick_model or "gpt-5-nano", "quick", tool_choice_override="none")
+            try:
+                if getattr(self, "progress", None) is not None:
+                    self.progress.stop_heartbeat("agent")
+            except Exception:
+                pass
+            await self._emit_progress("agent.finish", {"reason": "fast_path"})
+            return resp
         # Deduplicate identical tool calls within a run to reduce latency
         dedup_cache: Dict[str, Any] = {}
         last_response: Any = None
@@ -1392,12 +1635,50 @@ class Agent:
                         
                         # Extract meaningful findings based on tool type
                         if isinstance(summary, dict):
-                            if "movies" in summary and isinstance(summary["movies"], list) and summary["movies"]:
-                                findings.append(f"Found {len(summary['movies'])} movies")
+                            # Prefer listing top items when available
+                            if "items" in summary and isinstance(summary["items"], list) and summary["items"]:
+                                top = summary["items"][:3]
+                                for it in top:
+                                    if isinstance(it, dict) and it.get("title"):
+                                        ttl = str(it.get("title"))
+                                        yr = str(it.get("year")) if it.get("year") else None
+                                        findings.append(f"{ttl}{f' ({yr})' if yr else ''}")
+                                if len(findings) == 0:
+                                    findings.append(f"Found {len(summary['items'])} items")
+                            elif "results" in summary and isinstance(summary["results"], list) and summary["results"]:
+                                top = summary["results"][:3]
+                                def _year_from_date(d: str | None) -> str | None:
+                                    try:
+                                        if isinstance(d, str) and len(d) >= 4:
+                                            return d[:4]
+                                    except Exception:
+                                        return None
+                                    return None
+                                for it in top:
+                                    if isinstance(it, dict):
+                                        ttl = str(it.get("title") or it.get("name") or "").strip()
+                                        if ttl:
+                                            yr = _year_from_date(it.get("release_date") or it.get("first_air_date"))
+                                            findings.append(f"{ttl}{f' ({yr})' if yr else ''}")
+                                if len(findings) == 0:
+                                    findings.append(f"Found {len(summary['results'])} items")
+                            elif "movies" in summary and isinstance(summary["movies"], list) and summary["movies"]:
+                                top = summary["movies"][:3]
+                                for it in top:
+                                    if isinstance(it, dict) and it.get("title"):
+                                        ttl = str(it.get("title"))
+                                        yr = str(it.get("year")) if it.get("year") else None
+                                        findings.append(f"{ttl}{f' ({yr})' if yr else ''}")
+                                if len(findings) == 0:
+                                    findings.append(f"Found {len(summary['movies'])} movies")
                             elif "series" in summary and isinstance(summary["series"], list) and summary["series"]:
-                                findings.append(f"Found {len(summary['series'])} TV series")
-                            elif "items" in summary and isinstance(summary["items"], list) and summary["items"]:
-                                findings.append(f"Found {len(summary['items'])} items")
+                                top = summary["series"][:3]
+                                for it in top:
+                                    ttl = str(it.get("title") or it.get("name") or "").strip() if isinstance(it, dict) else ""
+                                    if ttl:
+                                        findings.append(ttl)
+                                if len(findings) == 0:
+                                    findings.append(f"Found {len(summary['series'])} TV series")
                             elif "ok" in summary and summary["ok"] is True:
                                 if "add" in name or "monitor" in name:
                                     findings.append("Successfully added to your collection")
@@ -1408,7 +1689,8 @@ class Agent:
                 except Exception:
                     continue
             
-            return findings[:5]  # Limit to top 5 findings
+            # Return top highlights only
+            return findings[:5] if findings else []
         except Exception:
             return []
 
@@ -1499,7 +1781,16 @@ class Agent:
                 except Exception as e:
                     self.log.warning(f"Failed to use quick model for iteration limit finalization: {e}, falling back to {model}")
                     response = await self._achat_once(final_messages, model, role, tool_choice_override="none")
-                
+
+                # Guard against empty/None content and synthesize a fallback
+                try:
+                    content = response.choices[0].message.content  # type: ignore[attr-defined]
+                except Exception:
+                    content = None
+                if not content:
+                    return self._generate_fallback_iteration_response(
+                        situation, tone, tool_summary, key_findings, elapsed_ms, pending_tools
+                    )
                 return response
             except Exception:
                 # Fallback to a structured response if LLM generation fails
