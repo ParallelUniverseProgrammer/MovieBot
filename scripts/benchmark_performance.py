@@ -1719,12 +1719,16 @@ async def run_tool_integration_benchmarks(
     print(f"\n{s.wrench()} Running Tool Integration Benchmarks...")
 
     try:
-        await run_tool_registry_benchmarks(benchmarker)
-        await run_plex_tool_benchmarks(benchmarker, args)
-        await run_tmdb_tool_benchmarks(benchmarker, args)
-        await run_radarr_tool_benchmarks(benchmarker, args)
-        await run_sonarr_tool_benchmarks(benchmarker, args)
-        await run_tool_cache_benchmarks(benchmarker)
+        # Run independent tool suites in parallel to speed up iteration
+        tasks = [
+            run_tool_registry_benchmarks(benchmarker),
+            run_plex_tool_benchmarks(benchmarker, args),
+            run_tmdb_tool_benchmarks(benchmarker, args),
+            run_radarr_tool_benchmarks(benchmarker, args),
+            run_sonarr_tool_benchmarks(benchmarker, args),
+            run_tool_cache_benchmarks(benchmarker),
+        ]
+        await asyncio.gather(*tasks, return_exceptions=True)
     except Exception as e:
         print(f"  {s.fail()} Tool integration benchmarks failed: {e}")
         if args.verbose:
@@ -2013,11 +2017,15 @@ async def run_worker_integration_benchmarks(
     print(f"\n{s.gear()} Running Worker Integration Benchmarks...")
 
     try:
-        await run_plex_worker_benchmarks(benchmarker, args)
-        await run_tmdb_worker_benchmarks(benchmarker, args)
-        await run_radarr_worker_benchmarks(benchmarker, args)
-        await run_sonarr_worker_benchmarks(benchmarker, args)
-        await run_summarizer_worker_benchmarks(benchmarker, args)
+        # Run independent worker suites in parallel to accelerate coverage
+        tasks = [
+            run_plex_worker_benchmarks(benchmarker, args),
+            run_tmdb_worker_benchmarks(benchmarker, args),
+            run_radarr_worker_benchmarks(benchmarker, args),
+            run_sonarr_worker_benchmarks(benchmarker, args),
+            run_summarizer_worker_benchmarks(benchmarker, args),
+        ]
+        await asyncio.gather(*tasks, return_exceptions=True)
     except Exception as e:
         print(f"  {s.fail()} Worker integration benchmarks failed: {e}")
         if args.verbose:

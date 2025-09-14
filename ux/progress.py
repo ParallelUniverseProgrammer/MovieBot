@@ -63,9 +63,8 @@ class AsyncProgressBroadcaster:
         self._sinks.append(sink)
 
     async def emit(self, event_type: str, data: Any) -> None:
-        # Unthrottled control events (make fewer unthrottled to reduce chatter)
-        # Keep only top-level lifecycle unthrottled
-        unthrottled = {"agent.start", "agent.finish", "thinking", "phase.read_only", "phase.write_enabled", "phase.validation"}
+        # Unthrottled control events (reduced to avoid chatter); add validation planned
+        unthrottled = {"agent.start", "agent.finish", "thinking", "phase.read_only", "phase.write_enabled", "phase.validation", "phase.validation_planned"}
         now = time.monotonic()
         if event_type not in unthrottled:
             last = self._last_emit_per_type.get(event_type, 0.0)
@@ -226,6 +225,12 @@ def _humanize_event(event_type: str, data: Any) -> Dict[str, Any]:
             pretty = _pretty_tool_name(name or "tool")
             label = name or "tool"
             base["message"] = f"{pretty} ({label}) hit a snag; recovering with retries or alternatives."
+        elif event_type == "agent.metrics":
+            iters = _safe_get(data, "iters")
+            llm = _safe_get(data, "llm_calls")
+            tools = _safe_get(data, "tool_calls")
+            elapsed = _safe_get(data, "elapsed_ms")
+            base["message"] = f"Run summary: iters={iters}, llm_calls={llm}, tool_calls={tools}, elapsed={elapsed} ms."
         elif event_type == "heartbeat":
             base["message"] = "Still working—keeping things moving in the background."
         elif event_type == "agent.finish":

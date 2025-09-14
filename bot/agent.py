@@ -10,7 +10,7 @@ import time
 
 from llm.clients import LLMClient
 from .agent_prompt import build_agent_system_prompt
-from .tools.registry_cache import get_cached_registry
+from .tools.registry_cache import get_cached_registry, initialize_registry_cache
 from .tools.tool_impl import build_preferences_context  # reuse the same formatter
 from config.loader import load_runtime_config
 from .tool_summarizers import summarize_tool_result
@@ -21,10 +21,19 @@ from integrations.ttl_cache import shared_cache
 
 class Agent:
     def __init__(self, *, api_key: str, project_root: Path, provider: str = "openai", progress_callback: Optional[Callable[[str, str], None]] = None):
-        # Override provider by config priority if available
+        # Provider precedence: explicit argument overrides config; otherwise resolve from config
         from config.loader import resolve_llm_selection, load_settings
-        prov, _sel = resolve_llm_selection(project_root, "chat", load_settings(project_root))
-        self.llm = LLMClient(api_key, provider=prov)
+        explicit_provider = (provider or "").strip()
+        if explicit_provider:
+            chosen_provider = explicit_provider
+        else:
+            chosen_provider, _sel = resolve_llm_selection(project_root, "chat", load_settings(project_root))
+        self.llm = LLMClient(api_key, provider=chosen_provider)
+        # Ensure registry cache is initialized in all entrypoints
+        try:
+            initialize_registry_cache(project_root)
+        except Exception:
+            pass
         self.openai_tools, self.tool_registry = get_cached_registry(self.llm)
         self.project_root = project_root
         self.log = logging.getLogger("moviebot.agent")
@@ -38,6 +47,49 @@ class Agent:
         self._role_selection_cache: Dict[str, Dict[str, Any]] = {}
         self._circuit: Dict[str, Dict[str, Any]] = {}
         self._tuning_cfg: Dict[str, Any] = {}
+
+    def _classify_query_complexity_heuristic(self, msgs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Lightweight heuristic to estimate query complexity without an LLM call.
+
+        Uses text length, conjunctions, and presence of write-intent verbs.
+        """
+        try:
+            text_parts: List[str] = [str(m.get("content", "")) for m in msgs if m.get("role") == "user"]
+            user_query = "\n".join(text_parts).strip()
+            if not user_query:
+                return {"complexity": "unknown", "confidence": 0.0, "reasoning": "Empty query", "requires_write": False, "suggested_tools": [], "estimated_iterations": 2}
+            t = user_query.lower()
+            # Write intent detection
+            write = any(w in t for w in ("add ", "remove ", "delete ", "update ", "monitor ", "set ")) and any(svc in t for svc in ("radarr", "sonarr", "rating", "watchlist"))
+            # Signals of complexity
+            conj = sum(t.count(x) for x in [" and ", " then ", ";", " also "])
+            length = len(t)
+            if write:
+                complexity = "complex"
+                est_iters = 3
+                conf = 0.7
+            elif length < 48 and conj == 0:
+                complexity = "simple"
+                est_iters = 2
+                conf = 0.6
+            elif length < 160 and conj <= 2:
+                complexity = "medium"
+                est_iters = 3
+                conf = 0.5
+            else:
+                complexity = "complex"
+                est_iters = 4
+                conf = 0.5
+            return {
+                "complexity": complexity,
+                "confidence": conf,
+                "reasoning": "Heuristic based on length/conjunctions/write verbs",
+                "requires_write": write,
+                "suggested_tools": [],
+                "estimated_iterations": est_iters,
+            }
+        except Exception:
+            return {"complexity": "unknown", "confidence": 0.0, "reasoning": "Heuristic failed", "requires_write": False, "suggested_tools": [], "estimated_iterations": 2}
 
     def _get_role_selection(self, role: str) -> Dict[str, Any]:
         """Resolve and cache LLM selection for a role for this Agent instance."""
@@ -292,11 +344,11 @@ class Agent:
             # Calculate confidence score
             confidence = self._calculate_result_confidence(tool_name_and_results)
             
-            # High confidence threshold for finalization - lowered for better responsiveness
-            if confidence >= 0.2:  # Much more lenient for read-only queries
+            # Require stronger evidence before finalizing read-only tasks
+            if confidence >= 0.6:
                 return True
             
-            # Check for write success (always finalizable)
+            # Check for write success (finalization gated to validation step elsewhere)
             any_write_success = False
             any_error = False
             
@@ -316,12 +368,13 @@ class Agent:
                         any_write_success = True
 
             if any_write_success:
-                return True
+                # Defer finalization until we perform a validation read
+                return False
             if any_error:
                 return False
             
-            # Medium confidence with some content - lowered for better responsiveness
-            return confidence >= 0.1  # Much more lenient for read-only queries
+            # Otherwise avoid premature termination under low confidence
+            return False
         except Exception:
             return False
 
@@ -335,17 +388,17 @@ class Agent:
             pass
         return False
 
-    def _is_circuit_open(self, tool_name: str) -> bool:
-        """Check if the circuit breaker is open for a specific tool."""
+    def _is_circuit_open(self, circuit_key: str) -> bool:
+        """Check if the circuit breaker is open for a specific route/tool key."""
         try:
             circuit_config = self._tuning_cfg.get("tools_cfg", {}).get("circuit", {})
             open_after_failures = circuit_config.get("openAfterFailures", 3)
             open_for_ms = circuit_config.get("openForMs", 3000)
             
-            if tool_name not in self._circuit:
+            if circuit_key not in self._circuit:
                 return False
             
-            circuit_state = self._circuit[tool_name]
+            circuit_state = self._circuit[circuit_key]
             failure_count = circuit_state.get("failures", 0)
             last_failure_time = circuit_state.get("last_failure", 0)
             
@@ -355,7 +408,7 @@ class Agent:
                 current_time = time.time() * 1000  # Convert to milliseconds
                 if current_time - last_failure_time > open_for_ms:
                     # Reset circuit
-                    self._circuit[tool_name] = {"failures": 0, "last_failure": 0}
+                    self._circuit[circuit_key] = {"failures": 0, "last_failure": 0}
                     return False
                 return True
             
@@ -363,25 +416,25 @@ class Agent:
         except Exception:
             return False
 
-    def _record_circuit_failure(self, tool_name: str) -> None:
-        """Record a failure for circuit breaker tracking."""
+    def _record_circuit_failure(self, circuit_key: str) -> None:
+        """Record a failure for circuit breaker tracking scoped to a circuit key."""
         try:
             import time
             current_time = time.time() * 1000  # Convert to milliseconds
             
-            if tool_name not in self._circuit:
-                self._circuit[tool_name] = {"failures": 0, "last_failure": 0}
+            if circuit_key not in self._circuit:
+                self._circuit[circuit_key] = {"failures": 0, "last_failure": 0}
             
-            self._circuit[tool_name]["failures"] += 1
-            self._circuit[tool_name]["last_failure"] = current_time
+            self._circuit[circuit_key]["failures"] += 1
+            self._circuit[circuit_key]["last_failure"] = current_time
         except Exception:
             pass
 
-    def _record_circuit_success(self, tool_name: str) -> None:
-        """Record a success to reset circuit breaker for a tool."""
+    def _record_circuit_success(self, circuit_key: str) -> None:
+        """Record a success to reset circuit breaker for a circuit key."""
         try:
-            if tool_name in self._circuit:
-                self._circuit[tool_name] = {"failures": 0, "last_failure": 0}
+            if circuit_key in self._circuit:
+                self._circuit[circuit_key] = {"failures": 0, "last_failure": 0}
         except Exception:
             pass
 
@@ -389,13 +442,26 @@ class Agent:
         """Classify errors as retryable, non_retryable, or circuit_breaker."""
         try:
             error_str = str(error).lower()
+            # Prefer explicit status codes when available
+            status_code = None
+            try:
+                status_code = getattr(error, "status_code", None) or getattr(getattr(error, "response", None), "status_code", None)
+            except Exception:
+                status_code = None
+            if isinstance(status_code, int):
+                if status_code in (401, 403, 404, 400, 409):
+                    return "non_retryable"
+                if status_code in (429, 502, 503):
+                    return "circuit_breaker"
+                if 500 <= status_code < 600:
+                    return "retryable"
             
             # Non-retryable errors (permanent failures)
             if any(x in error_str for x in [
                 "401", "unauthorized", "authentication", "invalid api key",
                 "403", "forbidden", "permission denied", "access denied",
                 "404", "not found", "does not exist",
-                "400", "bad request", "validation", "invalid parameter",
+                "400", "bad request", "validation", "invalid parameter", "conflict",
                 "movie already exists", "series already exists", "already been added"
             ]):
                 return "non_retryable"
@@ -447,20 +513,17 @@ class Agent:
         return await self._arun_tools_loop(base_messages, model, role, max_iters=max_iters, stream_final_to_callback=stream_final_to_callback)
 
     def _group_tool_calls_for_batching(self, tool_calls: List[Any]) -> List[Any]:
-        """Ultra-aggressive batching strategy with predictive execution and cross-family optimization.
-        
-        This method implements maximum performance batching based on:
-        1. Tool family characteristics and API response times
-        2. Operation type and safety requirements
-        3. Optimal batch sizes per family (increased for better throughput)
-        4. Cross-family batching opportunities
-        5. Predictive tool grouping based on common patterns
-        
-        Returns a list where each element is either a single tool call or a list of tool calls
-        that can be executed as a batch.
-        """
+        """Batch tools according to runtime-configured caps per family and speed profile."""
         if not tool_calls:
             return []
+        rc = load_runtime_config(self.project_root)
+        tools_cfg = (rc.get("tools") or {})
+        family_parallelism = (tools_cfg.get("familyParallelism") or {})
+        max_batch_by_family = (tools_cfg.get("maxBatchSizeByFamily") or {})
+        global_parallelism = int(tools_cfg.get("parallelism", 4))
+        
+        def _cap_for_family(family: str, default_cap: int) -> int:
+            return int(max_batch_by_family.get(family, family_parallelism.get(family, default_cap if default_cap else global_parallelism)))
         
         # Categorize tools by family and operation type
         ultra_fast_tools = []  # TMDb searches, Plex quick ops
@@ -500,40 +563,45 @@ class Agent:
             if self._is_write_tool_name(name):
                 write_tools.append(tc)
         
-        # Create ultra-optimized batches with increased sizes
+        # Create batches respecting config-driven caps
         result = []
         
-        # Ultra-fast tools: batch up to 16 per batch (TMDb can handle high concurrency)
+        # Ultra-fast tools (e.g., TMDb search/discover)
         if ultra_fast_tools:
-            for i in range(0, len(ultra_fast_tools), 16):
-                batch = ultra_fast_tools[i:i+16]
+            cap = _cap_for_family("tmdb", 16)
+            for i in range(0, len(ultra_fast_tools), cap):
+                batch = ultra_fast_tools[i:i+cap]
                 if len(batch) > 1:
                     result.append(batch)
                 else:
                     result.append(batch[0])
         
-        # Fast tools: batch up to 12 per batch
+        # Fast tools
         if fast_tools:
-            for i in range(0, len(fast_tools), 12):
-                batch = fast_tools[i:i+12]
+            # Use Plex cap if applicable; otherwise global
+            cap = min(_cap_for_family("plex", 8), global_parallelism)
+            for i in range(0, len(fast_tools), cap):
+                batch = fast_tools[i:i+cap]
                 if len(batch) > 1:
                     result.append(batch)
                 else:
                     result.append(batch[0])
         
-        # Medium tools: batch up to 8 per batch (increased from 4)
+        # Medium tools
         if medium_tools:
-            for i in range(0, len(medium_tools), 8):
-                batch = medium_tools[i:i+8]
+            cap = min(_cap_for_family("plex", 6), global_parallelism)
+            for i in range(0, len(medium_tools), cap):
+                batch = medium_tools[i:i+cap]
                 if len(batch) > 1:
                     result.append(batch)
                 else:
                     result.append(batch[0])
         
-        # Slow tools: batch up to 4 per batch (increased from 2)
+        # Slow tools (typically *arr writes)
         if slow_tools:
-            for i in range(0, len(slow_tools), 4):
-                batch = slow_tools[i:i+4]
+            cap = min(_cap_for_family("radarr", 4), _cap_for_family("sonarr", 4), global_parallelism)
+            for i in range(0, len(slow_tools), cap):
+                batch = slow_tools[i:i+cap]
                 if len(batch) > 1:
                     result.append(batch)
                 else:
@@ -578,12 +646,15 @@ class Agent:
         self.log.info(f"tool call requested: {name}")
         self.log.debug("tool args", extra={"name": name, "args": args_json})
         
-        # Parse args
+        # Parse args (with repair fallback)
         try:
             args = json.loads(args_json)
-        except json.JSONDecodeError as e:
-            payload = {"ok": False, "error": "invalid_json", "details": str(e)}
-            return tc.id, name, payload, 0, False
+        except json.JSONDecodeError:
+            repaired = self._repair_json(args_json)
+            if repaired is None:
+                payload = {"ok": False, "error": "invalid_json", "details": "Failed to parse tool arguments; please emit valid JSON with double quotes."}
+                return tc.id, name, payload, 0, False
+            args = repaired
 
         # De-duplicate identical tool calls within the same run
         try:
@@ -596,6 +667,17 @@ class Agent:
             # attempts=0 for dedup hit, cache_hit=True
             await self._emit_progress("tool.finish", {"name": name, "status": "ok", "duration_ms": 0, "attempts": 0, "cache_hit": True})
             return tc.id, name, result, 0, True
+
+        # Short-lived session-level dedup for read-only tools across turns
+        if dedup_key is not None and not self._is_write_tool_name(name):
+            try:
+                cached = shared_cache.get(f"tool:{dedup_key}")
+                if cached is not None:
+                    self.log.info("tool session dedup cache hit", extra={"name": name})
+                    await self._emit_progress("tool.finish", {"name": name, "status": "ok", "duration_ms": 0, "attempts": 0, "cache_hit": True})
+                    return tc.id, name, cached, 0, True
+            except Exception:
+                pass
 
         # Emit tool start only for actual executions (not dedup hits)
         await self._emit_progress("tool.start", {"name": name, "args": args_json})
@@ -618,8 +700,12 @@ class Agent:
                 raise e
 
         while True:
-            # Check circuit breaker before attempting
-            if self._is_circuit_open(name):
+            # Compute circuit key and check breaker before attempting
+            try:
+                circuit_key = self._get_circuit_key(name, args if isinstance(args, dict) else {})
+            except Exception:
+                circuit_key = name
+            if self._is_circuit_open(circuit_key):
                 last_err = {"ok": False, "error": "circuit_breaker_open", "name": name, "message": "Circuit breaker is open for this tool"}
                 result = last_err
                 status = "error"
@@ -644,17 +730,25 @@ class Agent:
                     result = await attempt_once()
                 status = "ok"
                 # Record success to reset circuit breaker
-                self._record_circuit_success(name)
+                self._record_circuit_success(circuit_key)
                 break
             except asyncio.TimeoutError as e:
                 last_err = {"ok": False, "error": "timeout", "timeout_ms": timeout_ms, "name": name}
                 error_classification = "retryable"  # Timeouts are retryable
             except Exception as e:
+                # Attach status code if present
+                status_code = None
+                try:
+                    status_code = getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", None)
+                except Exception:
+                    status_code = None
                 last_err = {"ok": False, "error": str(e)}
+                if status_code is not None:
+                    last_err["status"] = status_code
                 error_classification = self._classify_error_retryability(e)
             
             # Record failure for circuit breaker
-            self._record_circuit_failure(name)
+            self._record_circuit_failure(circuit_key)
             
             # Check if we should retry based on error classification
             if error_classification == "non_retryable":
@@ -679,6 +773,16 @@ class Agent:
         # Store in dedup cache for subsequent identical calls
         if dedup_cache is not None and dedup_key is not None and status == "ok":
             dedup_cache[dedup_key] = result
+        # Short-lived session dedup for read-only tools
+        try:
+            if not self._is_write_tool_name(name) and dedup_key is not None and status == "ok":
+                from config.loader import load_runtime_config
+                from integrations.ttl_cache import shared_cache
+                rc = load_runtime_config(self.project_root)
+                ttl = int((rc.get("cache", {}) or {}).get("ttlShortSec", 60))
+                shared_cache.set(f"tool:{dedup_key}", result, ttl)
+        except Exception:
+            pass
 
         self.log.info("tool done", extra={"name": name, "status": status, "duration_ms": duration_ms, "attempts": attempt + 1, "cache_hit": cache_hit})
         await self._emit_progress("tool.finish" if status == "ok" else "tool.error", {"name": name, "status": status, "duration_ms": duration_ms, "attempts": attempt + 1})
@@ -693,19 +797,14 @@ class Agent:
         first = tool_batch[0]
         fam = self._classify_tool_family(first.function.name)
         
-        # Dynamic parallelism based on family and batch size
-        if fam == "tmdb":
-            # TMDb is fast, allow higher parallelism
-            max_parallelism = min(len(tool_batch), 16)
-        elif fam == "plex":
-            # Plex is moderate, use family setting
-            max_parallelism = self._select_parallelism_for_family(fam)
-            max_parallelism = min(max_parallelism, len(tool_batch))
-        elif fam in ["radarr", "sonarr"]:
-            # *arr tools are slower, be more conservative
-            max_parallelism = min(self._select_parallelism_for_family(fam), len(tool_batch), 4)
-        else:
-            max_parallelism = min(self._select_parallelism_for_family(fam), len(tool_batch))
+        # Dynamic parallelism based on family and batch size, respecting runtime config
+        rc = load_runtime_config(self.project_root)
+        global_cap = int((rc.get("tools", {}) or {}).get("parallelism", 4))
+        family_cap = self._select_parallelism_for_family(fam)
+        # Additional conservative caps for *arr writes
+        if fam in ["radarr", "sonarr"]:
+            family_cap = min(family_cap, 4)
+        max_parallelism = min(len(tool_batch), family_cap, global_cap)
         
         if max_parallelism <= 0:
             max_parallelism = len(tool_batch)
@@ -750,6 +849,8 @@ class Agent:
         """Async version of _run_tools_loop with pipelined execution for maximum performance."""
         # Load runtime config for loop controls
         rc = load_runtime_config(self.project_root)
+        # Cache tuning for subordinate helpers
+        self._tuning_cfg = rc or {}
         # Role-specific iteration limits: prefer agentMaxIters/workerMaxIters, fallback to legacy maxIters
         llm_cfg = rc.get("llm", {}) or {}
         if role in ("smart", "chat"):
@@ -792,8 +893,16 @@ class Agent:
 
 
 
-        # Use LLM-based query classification for better decision making
-        classification_result = await self._classify_query_complexity_llm(base_messages)
+        # Query classification: use LLM only if enabled, else heuristic
+        use_llm_cls = bool((rc.get("llm", {}) or {}).get("useLlmQueryClassification", False))
+        classification_result = None
+        if use_llm_cls:
+            try:
+                classification_result = await self._classify_query_complexity_llm(base_messages)
+            except Exception:
+                classification_result = None
+        if classification_result is None:
+            classification_result = self._classify_query_complexity_heuristic(base_messages)
         complexity = classification_result["complexity"]
         confidence = classification_result["confidence"]
         reasoning = classification_result["reasoning"]
@@ -801,9 +910,13 @@ class Agent:
         suggested_tools = classification_result["suggested_tools"]
         estimated_iterations = classification_result["estimated_iterations"]
         
-        # Use LLM-suggested iteration limit, but respect config maximums
-        optimal_iters = min(estimated_iterations, iters)
-        iters = optimal_iters
+        # Use suggested iteration limit, but respect config maximums
+        try:
+            est = int(estimated_iterations)
+            if est > 0:
+                iters = min(est, iters)
+        except Exception:
+            pass
         
         # Add LLM classification guidance to system message
         if suggested_tools:

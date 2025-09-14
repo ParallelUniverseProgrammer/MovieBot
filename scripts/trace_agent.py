@@ -9,6 +9,7 @@ import psutil
 import os
 from pathlib import Path
 from typing import List, Dict, Any
+from collections import defaultdict
 
 import sys as _sys
 from pathlib import Path
@@ -74,6 +75,7 @@ class PerformanceProfiler:
         self.tool_calls: List[Dict[str, Any]] = []
         self.process = psutil.Process(os.getpid())
         self.start_time = time.perf_counter()
+        self.agent_events: List[Dict[str, Any]] = []
         
     def mark(self, name: str) -> None:
         """Mark a timing checkpoint."""
@@ -117,6 +119,15 @@ class PerformanceProfiler:
             "success": success,
             "error": error,
             "timestamp": time.perf_counter() - self.start_time
+        })
+
+    def record_agent_event(self, kind: str, detail: str) -> None:
+        if not self.enable_profiling:
+            return
+        self.agent_events.append({
+            "kind": kind,
+            "detail": detail,
+            "timestamp": time.perf_counter() - self.start_time,
         })
     
     def get_duration(self, start_name: str, end_name: str) -> float:
@@ -235,11 +246,15 @@ async def run_once(user_message: str, max_events: int, pretty: bool, profile: bo
     profiler.mark("registry_init")
 
     events: List[Dict[str, Any]] = []
+    llm_start_stack: List[Dict[str, Any]] = []
+    tool_start_times: Dict[str, List[float]] = defaultdict(list)
 
     def progress_callback(kind: str, detail: str) -> None:
         # Store and also print as we go
         try:
-            events.append({"kind": kind, "detail": detail})
+            events.append({"kind": kind, "detail": detail, "ts": time.perf_counter()})
+            if profile:
+                profiler.record_agent_event(kind, detail)
             _print_event(kind, detail)
             
             # Extract timing data from the humanized messages for profiling
@@ -249,36 +264,42 @@ async def run_once(user_message: str, max_events: int, pretty: bool, profile: bo
                     # Extract model from message like "Consulting gpt-4.1-nano to sketch..."
                     if "Consulting" in detail and "to sketch" in detail:
                         model = detail.split("Consulting ")[1].split(" to sketch")[0]
-                        profiler.llm_start_time = time.perf_counter()
-                        profiler.llm_model = model
+                        llm_start_stack.append({"t": time.perf_counter(), "model": model})
                 elif kind == "llm.finish":
                     # Calculate LLM call duration
-                    if hasattr(profiler, 'llm_start_time'):
-                        duration_ms = (time.perf_counter() - profiler.llm_start_time) * 1000
-                        profiler.record_llm_call(profiler.llm_model, duration_ms)
+                    if llm_start_stack:
+                        start_info = llm_start_stack.pop()
+                        duration_ms = (time.perf_counter() - start_info["t"]) * 1000
+                        profiler.record_llm_call(start_info.get("model", "unknown"), duration_ms)
                 elif kind == "tool.start":
                     # Extract tool name from message like "Starting TMDb search (tmdb_search) to advance..."
                     if "Starting" in detail and "(" in detail and ")" in detail:
                         tool_name = detail.split("(")[1].split(")")[0]
-                        profiler.tool_start_time = time.perf_counter()
-                        profiler.tool_name = tool_name
+                        tool_start_times[tool_name].append(time.perf_counter())
                 elif kind == "tool.finish":
                     # Calculate tool call duration and extract timing from message
-                    if hasattr(profiler, 'tool_start_time'):
-                        duration_ms = (time.perf_counter() - profiler.tool_start_time) * 1000
-                        # Also try to extract reported duration from message like "Finished TMDb search (tmdb_search) in 167 ms"
-                        reported_duration = None
-                        if " in " in detail and " ms" in detail:
-                            try:
-                                reported_duration = int(detail.split(" in ")[1].split(" ms")[0])
-                            except:
-                                pass
-                        profiler.record_tool_call(profiler.tool_name, duration_ms, True)
+                    tool_name = None
+                    if "(" in detail and ")" in detail:
+                        try:
+                            tool_name = detail.split("(")[1].split(")")[0]
+                        except Exception:
+                            tool_name = None
+                    if tool_name and tool_start_times.get(tool_name):
+                        start_t = tool_start_times[tool_name].pop()
+                        duration_ms = (time.perf_counter() - start_t) * 1000
+                        profiler.record_tool_call(tool_name, duration_ms, True)
                 elif kind == "tool.error":
                     # Handle tool errors
-                    if hasattr(profiler, 'tool_start_time'):
-                        duration_ms = (time.perf_counter() - profiler.tool_start_time) * 1000
-                        profiler.record_tool_call(profiler.tool_name, duration_ms, False, "tool error")
+                    tool_name = None
+                    if "(" in detail and ")" in detail:
+                        try:
+                            tool_name = detail.split("(")[1].split(")")[0]
+                        except Exception:
+                            tool_name = None
+                    if tool_name and tool_start_times.get(tool_name):
+                        start_t = tool_start_times[tool_name].pop()
+                        duration_ms = (time.perf_counter() - start_t) * 1000
+                        profiler.record_tool_call(tool_name, duration_ms, False, "tool error")
         except Exception:
             pass
 
