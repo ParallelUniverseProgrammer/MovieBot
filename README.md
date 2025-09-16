@@ -39,8 +39,7 @@ Whether you want to find something to watch tonight, add a new movie to your dow
 git clone <repository-url>
 cd MovieBot
 
-# Create environment file
-cp .env.example .env
+# Create an environment file (.env) — see "Configuration" below for keys
 # Edit .env with your API keys
 
 # Build and run
@@ -77,7 +76,7 @@ The setup process is a **two‑step helper**:
    - Checks Python version and dependencies  
    - Activates your virtual environment  
    - Validates your environment configuration  
-   - Runs the setup wizard if needed  
+   - Attempts to run the setup wizard if needed  
    - Starts the bot  
 
 2. **`setup_wizard.py`**  
@@ -86,7 +85,7 @@ The setup process is a **two‑step helper**:
    - Creates config files safely (never overwrites `.env`)  
    - Initializes household defaults  
 
-💡 If `.env` already exists, changes are written to `.env.wizard.suggested` for you to review.
+💡 If `.env` already exists, changes are written to `.env.wizard.suggested` for you to review. If your shell script cannot launch the wizard on your system, run `python main.py` once to complete setup, then start the bot.
 
 ---
 
@@ -148,9 +147,7 @@ MovieBot is fully containerized for easy deployment and sharing.
 git clone <repository-url>
 cd MovieBot
 
-# Create your environment file
-cp .env.example .env
-# Edit .env with your API keys
+# Create your environment file (.env) and add keys from the Configuration section
 
 # Build and run
 docker compose up -d
@@ -223,7 +220,7 @@ Others can simply clone and run:
 ```bash
 git clone your-repo
 cd MovieBot
-cp .env.example .env  # Fill in their values
+touch .env  # Fill in their values (see Configuration)
 docker compose up -d
 ```
 
@@ -271,12 +268,13 @@ MOVIEBOT_LOG_LEVEL=INFO
 ```
 
 **Required:**  
-- `DISCORD_TOKEN`  
-- `PLEX_TOKEN` + `PLEX_BASE_URL`  
-- Either `OPENAI_API_KEY` or `OPENROUTER_API_KEY`  
+- Minimal to run the bot: `DISCORD_TOKEN`, `PLEX_TOKEN` + `PLEX_BASE_URL`, and either `OPENAI_API_KEY` or `OPENROUTER_API_KEY`.  
 
-**Optional but recommended:**  
-- `DISCORD_GUILD_ID`, `APPLICATION_ID`, `RADARR_API_KEY`, `SONARR_API_KEY`, `TMDB_API_KEY`  
+**Optional (enables more features):**  
+- `RADARR_API_KEY`, `SONARR_API_KEY`, `TMDB_API_KEY` (for discovery and automated adds)  
+- `DISCORD_GUILD_ID`, `APPLICATION_ID` (faster command sync and richer presence)  
+
+Note: The interactive setup helper (`python main.py`) validates a fuller configuration and expects OpenAI + Radarr + Sonarr + TMDb before declaring setup “complete.” If you prefer a minimal config (e.g., Plex-only or OpenRouter), start the bot directly with `python -m bot.discord_bot`.
 
 ---
 
@@ -307,7 +305,7 @@ MovieBot learns what your household likes and adapts over time:
 - **Constraints** — runtime sweet spots, language, content warnings  
 - **Anti‑preferences** — what to avoid (e.g. shaky‑cam, found footage)  
 
-You can query and update preferences naturally:
+You can query and update preferences:
 ```bash
 @MovieBot "What genres do we like for horror movies?"
 @MovieBot "Add Pedro Pascal to our favorite actors"
@@ -319,14 +317,12 @@ You can query and update preferences naturally:
 ## 🎭 How It Works
 
 1. Discord messages → processed by the agent  
-2. Agent selects the right LLM role (chat, smart, worker)  
-3. Agent queries tools (Plex, Radarr, Sonarr, TMDb)  
-4. Two‑phase execution: read first, then write if needed  
-5. Results are streamed back to Discord  
+2. Agent selects the right LLM role (chat, smart, quick, worker)  
+3. Agent queries tools (Plex, Radarr, Sonarr, TMDb) with bounded, configurable parallelism  
+4. Two‑phase execution: read first, then perform writes with a quick validation read  
+5. Results are streamed back to Discord (with progress indicators)  
 
-```
 User → Agent → Tools → (optional) Writes → Streamed Answer
-```
 
 ---
 
@@ -336,9 +332,10 @@ User → Agent → Tools → (optional) Writes → Streamed Answer
 ```bash
 /discover search query:"Inception" year:2010
 /media recent
-/management addmovie tmdb_id:12345
-/prefs add path:"likes.genres" value:"thriller"
-/utilities ping
+/manage addmovie tmdb_id:12345
+/prefs add key:"likes.genres" value:"thriller"
+/utils ping
+/ping
 ```
 
 ### Natural Language
@@ -353,13 +350,13 @@ User → Agent → Tools → (optional) Writes → Streamed Answer
 
 ## ⚡ Performance & Reliability
 
-- **Caching** — short (60s) and medium (240s) TTL caches  
-- **Parallel execution** — up to 12 concurrent tool calls, tuned per service  
-- **Circuit breaker** — recovers gracefully after failures  
-- **Hedged requests** — backup requests reduce latency  
-- **Deduplication** — avoids redundant API calls
-- **Performance monitoring** — comprehensive benchmarking tool with intelligent thresholds
-- **Adaptive timeouts** — 30s for simple agent queries, 60s for complex ones  
+- **Caching** — short‑lived TTL caches (typically 30–120s; configurable)  
+- **Bounded parallelism** — configurable per family via `config.tools.parallelism` (default 4)  
+- **Circuit breaker & retries** — isolates failures and backs off automatically  
+- **Hedged requests** — selective backup requests (e.g., TMDb reads) to reduce tail latency  
+- **Deduplication** — request coalescing + result caching to avoid redundant calls  
+- **Monitoring** — built‑in benchmarking and tracing utilities  
+- **Configurable timeouts** — sensible defaults with per‑tool overrides  
 
 ---
 
@@ -407,25 +404,9 @@ python scripts/benchmark_performance.py --agent-simple-threshold 45 --agent-comp
 
 ### Expected Performance
 
-Based on comprehensive testing, here are the typical performance characteristics:
-
-**Service Operations (sub-second):**
-- **Plex**: 9-82ms average (library access, search, metadata)
-- **Radarr**: 22-277ms average (movie management, queue, history)
-- **Sonarr**: 21-82ms average (series management, queue, calendar)
-- **TMDb**: 31-213ms average (search, discovery, trending)
-
-**Agent Queries (intelligent thresholds):**
-- **Simple queries** (≤5 words, no filters): 8-27 seconds
-  - Examples: "Show me recent movies", "What's on deck?"
-- **Complex queries** (with filters/conditions): 11-25 seconds
-  - Examples: "Find horror movies from 2020-2023 with rating above 7.0"
-
-**Performance Features:**
-- **Parallel execution**: 1.3-1.4x speedup for multi-operation queries
-- **Smart caching**: Reduces redundant API calls
-- **Adaptive timeouts**: 30s for simple agent queries, 60s for complex ones
-- **Circuit breakers**: Graceful handling of service failures
+- Sub-second service calls for most metadata operations (Plex/Radarr/Sonarr/TMDb)
+- End-to-end agent answers usually in 10–25s depending on query complexity
+- Parallel batches yield noticeable speedups on multi-step discovery flows
 
 ### Benchmark Options
 
@@ -512,7 +493,7 @@ $ python scripts/trace_agent.py --message "Show me all the horror movies in my P
 [
   {
     "kind": "agent.start",
-    "detail": "Kicking off a plan and launching up to 12 tasks in parallel for 6 steps."
+    "detail": "Kicking off a plan and launching up to 4 tasks in parallel for 6 steps."
   },
   {
     "kind": "phase.read_only",
