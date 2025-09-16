@@ -26,12 +26,28 @@ Whether you want to find something to watch tonight, add a new movie to your dow
 ## 🚀 Quick Start
 
 ### 1. Prerequisites
-- Python 3.8+
+- Docker and Docker Compose (for containerized setup)
+- OR Python 3.8+ (for local development)
 - Discord Bot Token and Application ID
 - At least one LLM key: `OPENAI_API_KEY` or `OPENROUTER_API_KEY`
 - Plex, Radarr, Sonarr, and TMDb API keys (as needed)
 
 ### 2. Install
+
+**Option A: Docker (Recommended)**
+```bash
+git clone <repository-url>
+cd MovieBot
+
+# Create environment file
+cp .env.example .env
+# Edit .env with your API keys
+
+# Build and run
+docker compose up -d
+```
+
+**Option B: Local Python**
 ```bash
 git clone <repository-url>
 cd MovieBot
@@ -119,6 +135,103 @@ MOVIEBOT_LOG_LEVEL=DEBUG python -m bot.discord_bot
    - Use `/ping` to confirm the bot is alive  
    - In servers: mention the bot or use slash commands  
    - In DMs: just message it directly  
+
+---
+
+## 🐳 Docker Setup
+
+MovieBot is fully containerized for easy deployment and sharing.
+
+### Quick Docker Start
+```bash
+# Clone and setup
+git clone <repository-url>
+cd MovieBot
+
+# Create your environment file
+cp .env.example .env
+# Edit .env with your API keys
+
+# Build and run
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop
+docker compose down
+```
+
+### Docker Environment Variables
+
+Create a `.env` file with your configuration:
+
+```bash
+# Discord (Required)
+DISCORD_TOKEN=your_bot_token
+APPLICATION_ID=your_application_id
+DISCORD_GUILD_ID=optional_dev_guild_id
+
+# LLM Provider (Required - choose one)
+OPENAI_API_KEY=your_openai_key
+# OR
+OPENROUTER_API_KEY=your_openrouter_key
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_SITE_URL=https://your-site-or-repo-url
+OPENROUTER_APP_NAME=MovieBot
+
+# Media Services (Required)
+PLEX_BASE_URL=http://host.docker.internal:32400
+PLEX_TOKEN=your_plex_token
+
+# Optional but recommended
+RADARR_BASE_URL=http://host.docker.internal:7878
+RADARR_API_KEY=your_radarr_key
+SONARR_BASE_URL=http://host.docker.internal:8989
+SONARR_API_KEY=your_sonarr_key
+TMDB_API_KEY=your_tmdb_key
+
+# Logging
+MOVIEBOT_LOG_LEVEL=INFO
+```
+
+### Sharing Your Dockerized MovieBot
+
+**Option 1: Docker Hub**
+```bash
+# Build and push to Docker Hub
+docker build -t yourusername/moviebot:latest .
+docker push yourusername/moviebot:latest
+
+# Others can run with:
+docker run -d --name moviebot \
+  -v ./config:/app/config \
+  -v ./data:/app/data \
+  --env-file .env \
+  yourusername/moviebot:latest
+```
+
+**Option 2: GitHub Container Registry**
+```bash
+# Build and push to GitHub
+docker build -t ghcr.io/yourusername/moviebot:latest .
+docker push ghcr.io/yourusername/moviebot:latest
+```
+
+**Option 3: Share Repository**
+Others can simply clone and run:
+```bash
+git clone your-repo
+cd MovieBot
+cp .env.example .env  # Fill in their values
+docker compose up -d
+```
+
+### Docker Notes
+- The container runs as root to avoid Windows bind mount permission issues
+- Config and data are persisted via volume mounts (`./config` and `./data`)
+- No ports are exposed (Discord connects outbound only)
+- Use `host.docker.internal` for local service URLs on Windows/Mac
 
 ---
 

@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  moviebot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: moviebot:latest
+    container_name: moviebot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MOVIEBOT_LOG_LEVEL: ${MOVIEBOT_LOG_LEVEL:-INFO}
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+    # No ports required; Discord is outbound only

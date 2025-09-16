@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+.venv/
+.venv*/
+activate/
+
+# Env & secrets
+.env
+.env.*
+!/.env.example
+
+# Tests / coverage / logs
+htmlcov/
+.coverage
+.coverage.*
+.pytest_cache/
+*.log
+*.sqlite3
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Caches
+.cache/
+.mypy_cache/
+
+# Node (if any future additions)
+node_modules/
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Local data/config mounted at runtime
+/data/
+/config/config.yaml
